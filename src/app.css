@@ -1,0 +1,146 @@
+:root {
+	color-scheme: light;
+
+	/* Calm, premium, gender-neutral. Deliberately NO pink.
+	   Mapped to iOS system roles: bg = systemGroupedBackground,
+	   surface = secondarySystemGroupedBackground, line = separator. */
+	--bg: #f4f1ec; /* warm grouped background */
+	--surface: #ffffff;
+	--surface-sunken: #ece8e1;
+	--ink: #1c1b19; /* label */
+	--ink-soft: #5d5a54; /* secondaryLabel — passes 4.5:1 on surface */
+	--ink-faint: #8a857c; /* tertiaryLabel — large/decorative only */
+	--line: #e4dfd7; /* hairline separator */
+	--accent: #3e5c50; /* deep calm sage — used for text/icons/borders */
+	--accent-ink: #2c4339;
+	--accent-tint: #e7ede9;
+	--accent-fill: #3e5c50; /* button background behind white text (needs ≥4.5:1) */
+
+	/* "Worth discussing" clinical callout — warm amber, attention without alarm. */
+	--attn-bg: #fbf2ec;
+	--attn-line: #f0dccd;
+	--attn-ink: #8a4a33;
+
+	/* Flow intensity ramp — warm clay/rust, avoids the pink/red cliché */
+	--flow-none: #ece7df;
+	--flow-light: #e0c6a4;
+	--flow-medium: #c8895a;
+	--flow-heavy: #9c513a;
+
+	/* Severity ramp — one calm sage family deepening with intensity */
+	--sev-1-bg: #e7ede9;
+	--sev-1-ink: #2c4339;
+	--sev-2-bg: #6f9384;
+	--sev-2-ink: #ffffff;
+	--sev-3-bg: #3e5c50;
+	--sev-3-ink: #ffffff;
+
+	/* Continuous-style corners sized to iOS grouped tables, not web cards. */
+	--radius-card: 13px;
+	--radius-control: 11px;
+	--radius-pill: 999px;
+
+	/* iOS grouped lists carry NO drop shadow; depth is the hairline + fill. */
+	--shadow-card: none;
+
+	--font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui,
+		sans-serif;
+
+	--safe-top: env(safe-area-inset-top, 0px);
+	--safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Dark tokens defined now, inert until we flip [data-theme='dark'] — keeps the
+   app shipping light-first while the palette is ready for a single dark pass. */
+:root[data-theme='dark'] {
+	color-scheme: dark;
+	--bg: #16181a;
+	--surface: #1f2225;
+	--surface-sunken: #16181a;
+	--ink: #f3f1ec;
+	--ink-soft: #aeaaa2;
+	--ink-faint: #7e7a72;
+	--line: #2e3236;
+	--accent: #79a892; /* lifted sage — readable as text/icons on dark */
+	--accent-ink: #aacdbd;
+	--accent-tint: #1d2a25;
+	--accent-fill: #2f6a52; /* deeper sage so white button text stays ≥4.5:1 */
+	--attn-bg: #2a2118;
+	--attn-line: #3d3022;
+	--attn-ink: #e0b48f;
+	/* Soften the "mild" chip so it doesn't glare on a dark field. */
+	--sev-1-bg: #25342d;
+	--sev-1-ink: #cfe0d6;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+/* One source of truth for the iOS Large Title, shared by every screen. */
+.large-title {
+	font-size: 34px;
+	font-weight: 700;
+	letter-spacing: -0.4px;
+	line-height: 1.05;
+	color: var(--ink);
+}
+
+html,
+body {
+	margin: 0;
+	padding: 0;
+	background: var(--bg);
+	color: var(--ink);
+	font-family: var(--font);
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
+}
+
+body {
+	min-height: 100dvh;
+}
+
+button {
+	font-family: inherit;
+	cursor: pointer;
+	-webkit-tap-highlight-color: transparent;
+	-webkit-user-select: none;
+	user-select: none;
+}
+
+/* Keyboard-only focus ring — invisible to mouse/touch, clear for a11y */
+:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+	border-radius: var(--radius-control);
+}
+:focus:not(:focus-visible) {
+	outline: none;
+}
+
+input,
+textarea {
+	font-family: inherit;
+}
+
+h1,
+h2,
+h3,
+p {
+	margin: 0;
+}
+
+::selection {
+	background: var(--accent-tint);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
+}

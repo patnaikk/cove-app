@@ -7,7 +7,7 @@
 	// Re-viewable from Settings (?tour=1): no gating, "Done" returns to Settings.
 	const tour = $derived(page.url.searchParams.get('tour') === '1');
 
-	type Panel = { icon: 'cycle' | 'lock' | 'sliders'; title: string; body: string };
+	type Panel = { icon: 'cycle' | 'lock' | 'sliders'; title: string; body: string; note?: string };
 	const PANELS: Panel[] = [
 		{
 			icon: 'cycle',
@@ -17,12 +17,13 @@
 		{
 			icon: 'lock',
 			title: 'No account.\nWe never ask who you are.',
-			body: 'Most cycle apps keep your data on their servers. Cove doesn’t have any. No name, no email, no sign-up — everything you log is encrypted and stays on this phone. Never uploaded, never synced, never seen by us.'
+			body: `Most cycle apps keep your data on their servers. Cove doesn't have any. No name, no email, no sign-up — everything you log is encrypted and stays on this phone. Never uploaded, never synced, never seen by us.`
 		},
 		{
 			icon: 'sliders',
 			title: 'Your data,\nyour rules.',
-			body: 'Export everything to CSV for free, and delete any entry — or all of it — whenever you want. It’s yours to keep or erase. One price, once — never a subscription.\n\nIf you lose this phone, your history goes with it unless you’ve exported it — so back up your CSV somewhere safe.'
+			body: `Export everything to CSV for free, and delete any entry — or all of it — whenever you want. It's yours to keep or erase. One price, once — never a subscription.`,
+			note: `If you lose this phone, your history goes with it unless you've exported it — so back up your CSV somewhere safe.`
 		}
 	];
 	const last = PANELS.length - 1;
@@ -79,6 +80,7 @@
 				</div>
 				<h1>{p.title}</h1>
 				<p class="body">{p.body}</p>
+				{#if p.note}<p class="note">{p.note}</p>{/if}
 			</section>
 		{/each}
 	</div>
@@ -171,6 +173,13 @@
 		font-size: 16px;
 		line-height: 1.5;
 		color: var(--ink-soft);
+	}
+	.note {
+		margin-top: 12px;
+		max-width: 19rem;
+		font-size: 13px;
+		line-height: 1.45;
+		color: var(--ink-faint);
 	}
 
 	.footer {

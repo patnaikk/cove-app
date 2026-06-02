@@ -171,7 +171,7 @@
 		<span class="key"><span class="swatch" style="background: var(--flow-light)"></span>Light</span>
 		<span class="key"><span class="swatch" style="background: var(--flow-medium)"></span>Medium</span>
 		<span class="key"><span class="swatch" style="background: var(--flow-heavy)"></span>Heavy</span>
-		<span class="key"><span class="swatch dot"></span>Symptoms</span>
+		<span class="key"><span class="swatch dot"></span>Symptoms / mood</span>
 	</div>
 	{/if}
 </div>

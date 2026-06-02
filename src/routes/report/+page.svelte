@@ -36,7 +36,15 @@
 	function rangeFilter(all: CycleEntry[], r: Range): CycleEntry[] {
 		const days = RANGE_DAYS[r];
 		if (days == null) return all;
-		const start = shiftISO(todayISO(), -days);
+		let start = shiftISO(todayISO(), -days);
+		// Don't clip a period that straddles the window start: walk the start back to
+		// the first day of any bleeding run in progress at the boundary, so episode
+		// detection always sees whole periods (correct start date + period length).
+		// Without this, the oldest cycle in a narrow range could misreport.
+		const bleedingDates = new Set(
+			all.filter((e) => e.flow_intensity !== 'none').map((e) => e.date)
+		);
+		while (bleedingDates.has(shiftISO(start, -1))) start = shiftISO(start, -1);
 		return all.filter((e) => e.date >= start && e.date <= todayISO());
 	}
 	const entries = $derived(rangeFilter(allEntries, range));
@@ -132,7 +140,7 @@
 	}
 
 	function severityLabel(sev: Severity): string {
-		return `${SEVERITY_LABELS[sev]} (${sev}/3)`;
+		return SEVERITY_LABELS[sev];
 	}
 
 	function daysAgo(n: number): string {
@@ -441,7 +449,7 @@
 								<h2>{group.label}</h2>
 								<table>
 									<thead>
-										<tr><th>Symptom</th><th>Days</th><th>Peak</th><th>On period</th></tr>
+										<tr><th>Symptom</th><th>Days</th><th>Typical</th><th>Peak</th><th>During period</th></tr>
 									</thead>
 									<tbody>
 										{#each group.stats as s (s.key)}
@@ -486,13 +494,14 @@
 							<h2>{previewGroup.label}</h2>
 							<table>
 								<thead>
-									<tr><th>Symptom</th><th>Days</th><th>Peak</th><th>On period</th></tr>
+									<tr><th>Symptom</th><th>Days</th><th>Typical</th><th>Peak</th><th>During period</th></tr>
 								</thead>
 								<tbody>
 									{#each previewGroup.stats as s (s.key)}
 										<tr>
 											<td>{humanize(s.key)}</td>
 											<td>{s.days}</td>
+											<td>{severityLabel(s.typicalSeverity)}</td>
 											<td>{severityLabel(s.peakSeverity)}</td>
 											<td>{s.onBleedingDays}/{s.days}</td>
 										</tr>
@@ -505,36 +514,41 @@
 					{#if reportableHistory}
 					<section class="block no-print">
 						<div class="lock-card">
-							<div class="lock-head">
-								<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="3" /><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" /></svg>
-								<span>Your full report</span>
-							</div>
+							{#if analyticalFlags.length > 0}
+								<!-- Lead with a REAL insight Cove found — the kind a user can't eyeball
+								     and Apple's generic export doesn't surface. Sells analysis, not data volume. -->
+								<div class="lock-insight">
+									<span class="lock-insight-eyebrow">Cove found something worth discussing</span>
+									<p class="lock-insight-text">{analyticalFlags[0].text}</p>
+									{#if analyticalFlags.length > 1}
+										<span class="lock-insight-more">+{analyticalFlags.length - 1} more in your full report</span>
+									{/if}
+								</div>
+							{:else}
+								<div class="lock-head">
+									<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="3" /><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" /></svg>
+									<span>Your full report</span>
+								</div>
+							{/if}
+							<p class="lock-subhead">Unlock the clinician-formatted report for your next appointment:</p>
 							<ul class="lock-list">
+								<li><strong>A doctor-ready report</strong> — your patterns, flags, and history laid out for an appointment, not a screenshot of an app</li>
 								{#if analyticalFlags.length > 0}
-									<li>
-										{analyticalFlags.length} observation{analyticalFlags.length === 1 ? '' : 's'} worth
-										discussing with your doctor
-									</li>
+									<li>Every pattern worth discussing, explained — including how often each symptom falls outside your period</li>
 								{/if}
-								{#if lockedSymptomCount > 0}
-									<li>
-										{lockedSymptomCount} more symptom{lockedSymptomCount === 1 ? '' : 's'}
-										{#if lockedGroupCount > 0}
-											across {lockedGroupCount} more categor{lockedGroupCount === 1 ? 'y' : 'ies'}
-										{/if}, each ranked by peak severity and timing against your period
-									</li>
-								{:else if previewGroup}
-									<li>Every symptom ranked by peak severity and timing against your period</li>
-								{:else}
-									<li>Every symptom you log, ranked by severity and timing against your period</li>
-								{/if}
+								<li>
+									{#if lockedSymptomCount > 0}
+										Each symptom’s <strong>typical and peak severity</strong> and how it tracks against your cycle
+									{:else}
+										Every symptom’s <strong>typical and peak severity</strong> and how it tracks against your cycle
+									{/if}
+								</li>
 								{#if summary.moodCounts.length > 0}
 									<li>Mood patterns across {moodDayTotal} logged day{moodDayTotal === 1 ? '' : 's'}</li>
 								{/if}
 								{#if summary.weight}
 									<li>Your weight trend over the selected range</li>
 								{/if}
-								<li>A clean, formatted PDF to share with your doctor</li>
 							</ul>
 							<p class="lock-privacy">
 								Unlocking only verifies your purchase with Apple — your logs never leave this device.
@@ -714,7 +728,8 @@
 							<tr>
 								<th>Symptom</th>
 								<th class="num">Days</th>
-								<th class="num">Worst severity</th>
+								<th class="num">Typical</th>
+								<th class="num">Peak severity</th>
 								<th class="num">During period</th>
 							</tr>
 						</thead>
@@ -723,6 +738,7 @@
 								<tr>
 									<td>{humanize(s.key)}</td>
 									<td class="num">{s.days}</td>
+									<td class="num pd-sev pd-sev-{s.typicalSeverity}">{severityWord(s.typicalSeverity)}</td>
 									<td class="num pd-sev pd-sev-{s.peakSeverity}">{severityWord(s.peakSeverity)}</td>
 									<td class="num">{s.onBleedingDays} of {s.days}</td>
 								</tr>
@@ -1320,6 +1336,45 @@
 		color: var(--accent);
 		flex: none;
 	}
+	/* Insight-led lead: a real finding from the user's own data, framed as the
+	   reason to unlock — analysis they can't eyeball, not "more rows". */
+	.lock-insight {
+		padding: 14px 16px;
+		margin: -16px -16px 14px;
+		border-radius: var(--radius-control) var(--radius-control) 0 0;
+		background: var(--attn-bg);
+		border-bottom: 1px solid var(--attn-line);
+	}
+	.lock-insight-eyebrow {
+		display: block;
+		font-size: 11px;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: var(--attn-ink);
+		margin-bottom: 6px;
+	}
+	.lock-insight-text {
+		margin: 0;
+		font-size: 15px;
+		font-weight: 600;
+		line-height: 1.4;
+		letter-spacing: -0.2px;
+		color: var(--ink);
+	}
+	.lock-insight-more {
+		display: block;
+		margin-top: 6px;
+		font-size: 13px;
+		color: var(--ink-soft);
+	}
+	.lock-subhead {
+		margin: 0 0 4px;
+		font-size: 14px;
+		font-weight: 600;
+		letter-spacing: -0.2px;
+		color: var(--ink);
+	}
 	.lock-list {
 		margin: 12px 0 0;
 		padding-left: 20px;
@@ -1329,6 +1384,10 @@
 		line-height: 1.45;
 		color: var(--ink-soft);
 		margin: 6px 0;
+	}
+	.lock-list strong {
+		color: var(--ink);
+		font-weight: 600;
 	}
 	.lock-privacy {
 		margin-top: 14px;
@@ -1597,7 +1656,7 @@
 		.pd-table tr { break-inside: avoid; }
 		/* Alternating row tint */
 		.pd-zebra tbody tr:nth-child(even) td { background: #f5faf6; }
-		/* Worst severity — colour-coded so critical entries pop on a scan */
+		/* Severity — colour-coded so critical entries pop on a scan */
 		.pd-sev { font-weight: 700; }
 		.pd-sev-1 { color: #666; font-weight: 600; }   /* Mild — muted */
 		.pd-sev-2 { color: #7a5520; }                   /* Moderate — warm amber */

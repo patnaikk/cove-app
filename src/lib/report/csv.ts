@@ -1,8 +1,13 @@
 import type { CycleEntry } from '$lib/db/schema';
 
 function escape(value: string): string {
-	if (/[",\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-	return value;
+	// Guard against CSV formula injection: a cell starting with = + - @ can be
+	// executed as a formula when the file is opened in Excel/Sheets. Prefix with a
+	// single quote to neutralise it (standard mitigation) before normal escaping.
+	let v = value;
+	if (/^[=+\-@\t\r]/.test(v)) v = `'${v}`;
+	if (/[",\n]/.test(v)) return `"${v.replace(/"/g, '""')}"`;
+	return v;
 }
 
 // One row per entry. Spreadsheet-friendly, with no data loss — a complete,

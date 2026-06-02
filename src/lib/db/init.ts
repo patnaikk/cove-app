@@ -21,7 +21,14 @@ async function getOrCreatePassphrase(): Promise<string> {
 		.map((b) => b.toString(16).padStart(2, '0'))
 		.join('');
 
+	// Persist BEFORE returning. If this throws (e.g. Keychain locked at boot),
+	// we propagate — better to surface "couldn't open" than to silently open a
+	// blank DB on the next launch with a freshly-generated, non-matching key.
 	await Preferences.set({ key: KEY_NAME, value: passphrase });
+	// Verify the write landed — Keychain can accept the call but silently drop it
+	// if the device is in a restricted state (e.g. before first unlock after reboot).
+	const { value: written } = await Preferences.get({ key: KEY_NAME });
+	if (!written) throw new Error('[cove] Passphrase write did not persist — Keychain unavailable');
 	return passphrase;
 }
 

@@ -41,10 +41,15 @@
 		// the first day of any bleeding run in progress at the boundary, so episode
 		// detection always sees whole periods (correct start date + period length).
 		// Without this, the oldest cycle in a narrow range could misreport.
+		// Safety: don't walk back more than 30 days (overly long period is medical edge case).
 		const bleedingDates = new Set(
 			all.filter((e) => e.flow_intensity !== 'none').map((e) => e.date)
 		);
-		while (bleedingDates.has(shiftISO(start, -1))) start = shiftISO(start, -1);
+		let backSteps = 0;
+		while (backSteps < 30 && bleedingDates.has(shiftISO(start, -1))) {
+			start = shiftISO(start, -1);
+			backSteps++;
+		}
 		return all.filter((e) => e.date >= start && e.date <= todayISO());
 	}
 	const entries = $derived(rangeFilter(allEntries, range));
@@ -63,12 +68,14 @@
 	// Single-/open-cycle feedback: irregular users (the core audience) can't get a
 	// cycle-LENGTH number until two periods, but we can still reflect an unusually
 	// long open gap from a single period — the validation they came for, months early.
+	// Use allSummary so the note survives if the user manually narrows the range —
+	// an irregular user’s only period may fall outside a 3m window.
 	const openCycleNote = $derived(
-		summary.lastPeriodStart &&
-			summary.daysSinceLastPeriod != null &&
-			summary.cycleLengthMedian == null &&
-			summary.daysSinceLastPeriod > 35
-			? `It’s been ${summary.daysSinceLastPeriod} days since your last period began. A typical cycle runs about 21–35 days — worth mentioning to your doctor if that’s unusual for you.`
+		allSummary.lastPeriodStart &&
+			allSummary.daysSinceLastPeriod != null &&
+			allSummary.cycleLengthMedian == null &&
+			allSummary.daysSinceLastPeriod > 35
+			? `It’s been ${allSummary.daysSinceLastPeriod} days since your last period began. A typical cycle runs about 21–35 days — worth mentioning to your doctor if that’s unusual for you.`
 			: null
 	);
 
@@ -90,8 +97,11 @@
 	// part of the paid detailed report (shown as a count when locked).
 	// Urgent flags always derive from the FULL history so narrowing the range to 3m
 	// can never hide a "no period in 90+ days" medical alert.
+	// Both flag sets derive from the full history so the range selector can't make
+	// clinical signals vanish. Urgent flags (free) and analytical flags (paid lock
+	// card headline) must stay consistent regardless of the 3m/6m/all toggle.
 	const urgentFlags = $derived(allSummary.flags.filter((f) => f.urgent));
-	const analyticalFlags = $derived(summary.flags.filter((f) => !f.urgent));
+	const analyticalFlags = $derived(allSummary.flags.filter((f) => !f.urgent));
 
 	// For the PDF: how many complete cycles back the length stats, and the user's
 	// own dated notes (captured but never surfaced in the report until now).
@@ -221,9 +231,16 @@
 		}
 	}
 
-	function exportPdf() {
+	let pdfError = $state('');
+	async function exportPdf() {
 		if (!unlocked) return;
-		printReport();
+		pdfError = '';
+		try {
+			await printReport();
+		} catch (e) {
+			console.error('[cove] PDF export failed:', e);
+			pdfError = 'Could not generate PDF — please try again.';
+		}
 	}
 
 	let purchasing = $state(false);
@@ -356,7 +373,7 @@
 					</p>
 				{/if}
 
-				{@const shownFlags = unlocked ? summary.flags : urgentFlags}
+				{@const shownFlags = unlocked ? allSummary.flags : urgentFlags}
 				{#if shownFlags.length > 0}
 					<section class="flags">
 						<h2>Worth discussing</h2>
@@ -456,6 +473,7 @@
 											<tr>
 												<td>{humanize(s.key)}</td>
 												<td>{s.days}</td>
+												<td>{severityLabel(s.typicalSeverity)}</td>
 												<td>{severityLabel(s.peakSeverity)}</td>
 												<td>{s.onBleedingDays}/{s.days}</td>
 											</tr>
@@ -569,6 +587,7 @@
 
 			{#if unlocked}
 				<button class="btn primary" onclick={exportPdf}>Save PDF report</button>
+				{#if pdfError}<p class="purchase-error" role="alert">{pdfError}</p>{/if}
 			{:else if reportableHistory}
 				<button class="btn primary" onclick={unlock} disabled={purchasing}>
 					{purchasing ? 'Opening…' : 'Unlock full report · $9.99'}
@@ -675,13 +694,14 @@
 			{/if}
 		</section>
 
-		<!-- ── Worth discussing: amber callout ── -->
-		{#if summary.flags.length > 0}
+		<!-- ── Worth discussing: amber callout — always from full history so narrowing
+		     the range can never drop a clinical flag from the printed artifact ── -->
+		{#if allSummary.flags.length > 0}
 			<section class="pd-section">
 				<h2>Worth discussing with your doctor</h2>
 				<div class="pd-callout">
 					<ul class="pd-flags">
-						{#each summary.flags as f, i (i)}
+						{#each allSummary.flags as f, i (i)}
 							<li>{f.text}</li>
 						{/each}
 					</ul>

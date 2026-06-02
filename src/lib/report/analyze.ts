@@ -223,20 +223,24 @@ export function buildSummary(entries: CycleEntry[], todayISO?: string): ReportSu
 			.sort((a, b) => b.days - a.days)
 	})).filter((g) => g.stats.length > 0);
 
-	// Intermenstrual bleeding (spotting) — a gynaecologist flag we already capture.
-	const spottingDays = sorted.filter((e) => e.symptoms.some((s) => s.key === 'spotting')).length;
-	if (spottingDays >= 2) flag(`Spotting logged on ${spottingDays} days between periods.`);
+	// Intermenstrual bleeding (spotting) — a gynaecologist flag.
+	// Only count days that fall OUTSIDE bleeding: spotting during a period is
+	// normal variation; spotting between periods is the clinical signal.
+	const spottingDays = sorted.filter(
+		(e) => e.symptoms.some((s) => s.key === 'spotting') && !bleedingDates.has(e.date)
+	).length;
+	if (spottingDays >= 2) flag(`Spotting logged on ${spottingDays} days outside your period.`);
 	// Prolonged absence of a period (possible amenorrhoea) — open cycle only.
 	// URGENT: something a person may need to act on now, so it stays free.
 	if (daysSinceLastPeriod != null && daysSinceLastPeriod > 90)
-		flag(`No period logged in ${daysSinceLastPeriod} days (over 90).`, true);
+		flag(`Last period started ${daysSinceLastPeriod} days ago (over 90 — worth discussing).`, true);
 	// Non-cyclical pain — pain logged mostly OUTSIDE bleeding is an endometriosis
 	// red flag clinicians look for. Derived from data we already record.
 	for (const [key, a] of symAgg) {
 		if (GROUP_OF[key] !== 'Pain') continue;
 		const days = a.sev.length;
-		if (days >= 3 && a.onBleed / days <= 1 / 3)
-			flag(`${humanize(key)} logged on ${days} days, mostly outside your period.`);
+		if (days >= 4 && a.onBleed / days <= 1 / 3)
+			flag(`${humanize(key)} logged on ${days} days, ${days - a.onBleed} outside your period.`);
 	}
 
 	const moodAgg = new Map<string, number>();

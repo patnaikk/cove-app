@@ -100,6 +100,7 @@
 		} catch (e) {
 			console.error('[vault/db] save failed:', e);
 			saveError = true;
+		} finally {
 			saving = false;
 		}
 	}

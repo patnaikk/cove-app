@@ -6,6 +6,9 @@
 	import { fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
 	import { hasOnboarded, applyTheme, applyReminder } from '$lib/ui/preferences.svelte';
+	import { initBilling } from '$lib/billing/entitlement';
+	import { Capacitor } from '@capacitor/core';
+	import { resetDb, ensureDb } from '$lib/db/init';
 	import TabBar from '$lib/ui/TabBar.svelte';
 
 	let { children } = $props();
@@ -24,23 +27,61 @@
 		applyReminder();
 	});
 
+	// Register IAP product and restore any prior purchase on launch.
+	$effect(() => {
+		initBilling();
+	});
+
+	// Reconnect the SQLite DB when iOS resumes the app from the background.
+	// After a long suspension the native SQLite connection is dropped; we close
+	// the stale handle and re-open so every screen gets a live connection.
+	//
+	// IMPORTANT: only reconnect on a genuine background→foreground transition.
+	// Reconnecting on the *initial* active event would race the first page load's
+	// own ensureDb() call and corrupt the open sequence. We require having seen a
+	// background (isActive:false) first.
+	$effect(() => {
+		if (!Capacitor.isNativePlatform()) return;
+		let cleanup: (() => void) | undefined;
+		let wasBackgrounded = false;
+		import('@capacitor/app').then(({ App }) => {
+			const handle = App.addListener('appStateChange', async ({ isActive }) => {
+				if (!isActive) {
+					wasBackgrounded = true;
+					return;
+				}
+				if (!wasBackgrounded) return; // initial activation — first load handles it
+				wasBackgrounded = false;
+				try {
+					await resetDb();
+					await ensureDb();
+				} catch (e) {
+					console.error('[cove] DB reconnect after resume failed:', e);
+				}
+			});
+			cleanup = () => { handle.then(h => h.remove()); };
+		});
+		return () => cleanup?.();
+	});
+
+	// Use page.route.id (set by SvelteKit's router) rather than page.url.pathname
+	// — on native Capacitor the URL may always be capacitor://localhost/ regardless
+	// of which page is active, but route.id is always the correct route string.
+	const routeId = $derived(page.route.id ?? '');
+
 	// Routes that must stay reachable before onboarding completes.
 	const PUBLIC = ['/welcome', '/privacy'];
 
-	// The four primary destinations that carry the bottom tab bar. Everything else
-	// (welcome, privacy, flare) is a full-screen stack/modal with its own chrome.
-	const TAB_ROUTES = ['/', '/calendar', '/report', '/settings'];
+	// Stack screens (full-screen, own chrome). Tab bar is hidden on these.
+	const STACK_ROUTES = ['/welcome', '/privacy', '/flare'];
 
 	// Synchronous so the gated screen never flashes before the redirect fires.
 	const needsOnboarding = $derived(
-		!hasOnboarded() && !PUBLIC.includes(page.url.pathname)
+		!hasOnboarded() && !PUBLIC.includes(routeId)
 	);
 
-	const showTabBar = $derived(!needsOnboarding && TAB_ROUTES.includes(page.url.pathname));
-
-	// Stack screens (flare/privacy/welcome) push in from the right like native iOS.
-	// Tab routes switch instantly (correct iOS tab behavior).
-	const isStack = $derived(!TAB_ROUTES.includes(page.url.pathname));
+	const isStack = $derived(STACK_ROUTES.some(r => routeId.startsWith(r)));
+	const showTabBar = $derived(!needsOnboarding && !isStack);
 	const routeIn = $derived(
 		isStack
 			? { x: 320, duration: 300, opacity: 1, easing: cubicOut }

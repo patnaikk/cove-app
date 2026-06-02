@@ -11,7 +11,8 @@ const config: CapacitorConfig = {
       resize: 'native'
     },
     CapacitorSQLite: {
-      iosIsEncryption: false
+      iosIsEncryption: true,
+      iosKeychainPrefix: 'app.cove.ios'
     }
   }
 };

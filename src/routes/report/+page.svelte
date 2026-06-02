@@ -5,7 +5,8 @@
 	import { buildSummary, type ReportSummary, type Regularity } from '$lib/report/analyze';
 	import { buildCsv } from '$lib/report/csv';
 	import { downloadText, printReport } from '$lib/report/export';
-	import { isPdfUnlocked, devSetPdfUnlocked } from '$lib/billing/entitlement';
+	import { isPdfUnlocked, devSetPdfUnlocked, purchasePdfUnlock } from '$lib/billing/entitlement';
+	import { Capacitor } from '@capacitor/core';
 	import { humanize, todayISO, shiftISO, daysBetween, friendlyDate, mediumDate } from '$lib/ui/format';
 	import { getWeightUnit, kgToDisplay } from '$lib/ui/preferences.svelte';
 	import { selectionTick, successTick } from '$lib/ui/haptics';
@@ -217,11 +218,28 @@
 		printReport();
 	}
 
-	// Dev stand-in for the StoreKit purchase. Replaced by a real flow on device.
-	function devUnlock() {
-		devSetPdfUnlocked(true);
-		unlocked = true;
-		successTick();
+	let purchasing = $state(false);
+	let purchaseError = $state('');
+
+	async function unlock() {
+		purchaseError = '';
+		if (Capacitor.isNativePlatform()) {
+			purchasing = true;
+			try {
+				await purchasePdfUnlock();
+				unlocked = isPdfUnlocked();
+				if (unlocked) successTick();
+			} catch (e: any) {
+				purchaseError = e?.message ?? 'Purchase failed. Please try again.';
+			} finally {
+				purchasing = false;
+			}
+		} else {
+			// Browser dev only.
+			devSetPdfUnlocked(true);
+			unlocked = true;
+			successTick();
+		}
 	}
 </script>
 
@@ -538,9 +556,10 @@
 			{#if unlocked}
 				<button class="btn primary" onclick={exportPdf}>Save PDF report</button>
 			{:else if reportableHistory}
-				<button class="btn primary" onclick={devUnlock}>
-					Unlock full report · $9.99
+				<button class="btn primary" onclick={unlock} disabled={purchasing}>
+					{purchasing ? 'Opening…' : 'Unlock full report · $9.99'}
 				</button>
+				{#if purchaseError}<p class="purchase-error">{purchaseError}</p>{/if}
 			{/if}
 		</div>
 
@@ -1325,6 +1344,12 @@
 		color: var(--ink-soft);
 		text-align: center;
 		line-height: 1.45;
+	}
+	.purchase-error {
+		margin-top: 8px;
+		font-size: 13px;
+		color: var(--color-error, #c0392b);
+		text-align: center;
 	}
 	.paywall-eula {
 		color: var(--ink-soft);

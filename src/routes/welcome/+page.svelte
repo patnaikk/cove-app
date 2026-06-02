@@ -22,7 +22,7 @@
 		{
 			icon: 'sliders',
 			title: 'Your data,\nyour rules.',
-			body: 'Export everything to CSV for free, and delete any entry — or all of it — whenever you want. It’s yours to keep or erase. One price, once — never a subscription.'
+			body: 'Export everything to CSV for free, and delete any entry — or all of it — whenever you want. It’s yours to keep or erase. One price, once — never a subscription.\n\nIf you lose this phone, your history goes with it unless you’ve exported it — so back up your CSV somewhere safe.'
 		}
 	];
 	const last = PANELS.length - 1;

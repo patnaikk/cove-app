@@ -62,6 +62,7 @@
 	let flow = $state<FlowIntensity>('none');
 	// symptom key -> severity (absent key = not logged)
 	let symptomMap = $state<Record<string, Severity>>({});
+	let activeTip = $state<string | null>(null);
 	let mood = $state<Mood[]>([]);
 	let weight = $state<string>('');
 	let notes = $state('');
@@ -182,8 +183,15 @@
 		const current = symptomMap[key];
 		const next = current === undefined ? 1 : current === 3 ? undefined : ((current + 1) as Severity);
 		const copy = { ...symptomMap };
-		if (next === undefined) delete copy[key];
-		else copy[key] = next;
+		if (next === undefined) {
+			delete copy[key];
+			// Hide tip when symptom is deselected
+			if (activeTip === key) activeTip = null;
+		} else {
+			copy[key] = next;
+			// Show this symptom's tip (hides any other open tip)
+			activeTip = SYMPTOM_TIPS[key] ? key : null;
+		}
 		symptomMap = copy;
 	}
 
@@ -364,7 +372,7 @@
 									{humanize(key)}
 									{#if sev}<span class="sev-tag">· {SEVERITY_LABELS[sev]}</span>{/if}
 								</button>
-								{#if sev && tip}
+								{#if activeTip === key && tip}
 									<p class="sym-tip">{tip}</p>
 								{/if}
 							{/each}

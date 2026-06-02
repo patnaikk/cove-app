@@ -34,7 +34,7 @@ export function ensureDb(): Promise<void> {
 		const attempt = Capacitor.isNativePlatform()
 			? getOrCreatePassphrase()
 					.then((passphrase) => openDb({ passphrase }))
-					.then(() => undefined)
+					.then(() => undefined as void)
 			: Promise.resolve();
 		// If initialisation fails, clear the cached promise so the next ensureDb()
 		// call retries — otherwise "Try again" buttons are permanently broken.
@@ -44,4 +44,19 @@ export function ensureDb(): Promise<void> {
 		});
 	}
 	return ready;
+}
+
+// Call this before ensureDb() when you need to force a fresh connection —
+// e.g. when iOS resumes the app from the background and the native SQLite
+// handle has been dropped. Resets the cached promise so ensureDb() reopens.
+export async function resetDb(): Promise<void> {
+	try {
+		const { closeDb } = await import('./db');
+		await closeDb();
+	} catch {
+		// Ignore — closeDb is already defensive, but belt-and-suspenders here.
+	} finally {
+		// Always reset ready so the next ensureDb() forces a real re-open.
+		ready = null;
+	}
 }

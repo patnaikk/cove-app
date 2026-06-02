@@ -105,7 +105,7 @@ Every change after: `npm run build && npx cap sync ios`
 ---
 
 ## 8. App Store submission checklist
-- [ ] Host `static/privacy.html` at a public URL (see §9)
+- [x] Host `privacy.html` at a public URL (LIVE: https://patnaikk.github.io/cove-app/privacy.html)
 - [ ] Paste URL into App Store Connect → App Information → Privacy Policy URL
 - [ ] App privacy nutrition label → **Data Not Collected**
 - [ ] Screenshots: 6.7" (iPhone 16 Pro Max) + 5.5" (iPhone 8 Plus) — both required
@@ -115,13 +115,10 @@ Every change after: `npm run build && npx cap sync ios`
 
 ---
 
-## 9. Hosting the privacy policy (free, ~5 min)
-`static/privacy.html` is a self-contained page. Two easy options:
-
-**Option A — GitHub Pages (recommended):**
-1. Push this repo to GitHub
-2. Repo Settings → Pages → Source: `main` branch / `/(root)` folder
-3. URL: `https://YOUR-USERNAME.github.io/REPO-NAME/privacy.html`
+## 9. Hosting the privacy policy — ✅ DONE
+`privacy.html` (repo root) is hosted via GitHub Pages.
+LIVE URL: **https://patnaikk.github.io/cove-app/privacy.html**
+(Pages serves from `main` branch / root. File moved from `static/` to repo root for a clean URL.)
 
 **Option B — Vercel/Netlify (whole app):**
 Deploy the SvelteKit app for free → the `/privacy` route becomes public.

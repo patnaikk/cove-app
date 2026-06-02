@@ -233,8 +233,10 @@
 		// type="number" binding can hand back a number, '', or null — normalise first.
 		const rawWeight = String(weight ?? '').trim();
 		const parsedWeight = rawWeight === '' ? null : Number(rawWeight);
+		// Treat 0 as unset — no human weighs 0 kg/lb, and it would corrupt the
+		// weight range in the report. Negative values equally impossible.
 		const weightKg =
-			parsedWeight != null && Number.isFinite(parsedWeight)
+			parsedWeight != null && Number.isFinite(parsedWeight) && parsedWeight > 0
 				? displayToKg(parsedWeight)
 				: null;
 		const payload = {

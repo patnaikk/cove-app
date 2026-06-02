@@ -698,7 +698,7 @@
 		     the range can never drop a clinical flag from the printed artifact ── -->
 		{#if allSummary.flags.length > 0}
 			<section class="pd-section">
-				<h2>Worth discussing with your doctor</h2>
+				<h2>Worth discussing with your doctor <span class="pd-flag-scope">(full history)</span></h2>
 				<div class="pd-callout">
 					<ul class="pd-flags">
 						{#each allSummary.flags as f, i (i)}
@@ -1531,6 +1531,13 @@
 			margin: 0 0 10px;
 			padding-bottom: 5px;
 			border-bottom: 1.5px solid #3e5c50;
+		}
+		.pd-flag-scope {
+			font-weight: 600;
+			text-transform: none;
+			letter-spacing: 0;
+			color: #aaa;
+			font-size: 6.5pt;
 		}
 		.pd-group-head {
 			font-size: 9.5pt;

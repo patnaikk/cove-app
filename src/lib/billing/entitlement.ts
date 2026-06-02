@@ -50,7 +50,7 @@ export async function initBilling(): Promise<void> {
 }
 
 export function isPdfUnlocked(): boolean {
-	if (Capacitor.isNativePlatform()) return true; // TODO: remove before App Store submission — dev bypass
+	if (Capacitor.isNativePlatform()) return _unlocked;
 	// Browser dev fallback.
 	try { return localStorage.getItem(DEV_KEY) === '1'; } catch { return false; }
 }

@@ -49,6 +49,7 @@ body{margin:0;padding:20px;background:#fff;font-family:-apple-system,'SF Pro Tex
 
 .pd-section{margin-top:22px;break-inside:avoid}
 .pd-section h2{font-size:7pt;font-weight:800;text-transform:uppercase;letter-spacing:.12em;color:#3e5c50;margin:0 0 10px;padding-bottom:5px;border-bottom:1.5px solid #3e5c50}
+.pd-flag-scope{font-weight:600;text-transform:none;letter-spacing:0;color:#aaa;font-size:6.5pt}
 .pd-group-head{font-size:9.5pt;font-weight:700;color:#333;margin:18px 0 6px;padding:0;border:none}
 
 .pd-stats{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid #c5dbd3;border-radius:5px;overflow:hidden;background:#f2f7f5}

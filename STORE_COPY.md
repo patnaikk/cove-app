@@ -13,14 +13,14 @@ state it plainly and let the contrast do the work.
 Cove — Private Cycle Tracker
 
 ## Subtitle (30 char max)
-Your cycle, only on your phone
+Private. No account. No cloud.
 
 ## Promotional text (170 char max — editable without review)
 No account, no cloud, no subscription. Cove keeps every period, symptom and mood
 on your device — and turns it into a report you can hand to your doctor.
 
 ## Keywords (100 char max, comma-separated, no spaces)
-period,cycle,tracker,private,offline,endometriosis,pcos,symptom,pain,menstrual,health,report
+period,cycle,tracker,private,offline,endo,pcos,cramps,symptom,pain,irregular,report,doctor
 
 ## Description
 

@@ -1,4 +1,4 @@
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, registerPlugin } from '@capacitor/core';
 
 // Ask iOS to show the native "Rate this app" prompt via our thin inline
 // ReviewPlugin (ReviewPlugin.swift in the Xcode project).
@@ -6,7 +6,7 @@ import { Capacitor } from '@capacitor/core';
 // Rules:
 // - Only fires on device (no-op in browser dev)
 // - Only fires when the user has just started their SECOND period — they've
-//   been through a full cycle, came back, and are clearly getting value.
+//   been through a full cycle, come back, and are clearly getting value.
 //   This is a strong satisfaction signal; prompting earlier wastes the one
 //   reliable shot we have at a 5-star review.
 // - Apple's SKStoreReviewController internally suppresses the prompt if it
@@ -14,6 +14,14 @@ import { Capacitor } from '@capacitor/core';
 //   so duplicate calls are safe — Apple silently no-ops them.
 // - We additionally guard with a localStorage flag so we never call the
 //   plugin more than once per install, independent of Apple's throttle.
+
+interface ReviewPlugin {
+	requestReview(): Promise<void>;
+}
+
+// registerPlugin lazily binds to the native implementation by jsName.
+// The name MUST match jsName in ReviewPlugin.swift ("ReviewPlugin").
+const Review = registerPlugin<ReviewPlugin>('ReviewPlugin');
 
 const REVIEW_ASKED_KEY = 'cove.review.asked';
 
@@ -24,11 +32,7 @@ export async function maybeRequestReview(): Promise<void> {
 		// Belt-and-suspenders: don't call the plugin if we already did.
 		if (localStorage.getItem(REVIEW_ASKED_KEY) === '1') return;
 
-		// Call our inline Swift plugin directly — no npm package required.
-		// ReviewPlugin.swift lives in ios/App/App/ and is compiled into the
-		// Xcode project automatically as part of the App target.
-		const plugins = (Capacitor as unknown as { Plugins: Record<string, Record<string, () => Promise<void>>> }).Plugins;
-		await plugins['ReviewPlugin']['requestReview']();
+		await Review.requestReview();
 
 		// Mark as asked so we never prompt again on this install.
 		localStorage.setItem(REVIEW_ASKED_KEY, '1');

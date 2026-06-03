@@ -261,11 +261,15 @@
 			setTimeout(() => (justSaved = false), 2000);
 
 			// Fire the native review prompt when the user logs the FIRST day of their
-			// second period. By that point they've completed a full cycle and returned
-			// — a strong satisfaction signal. We check that today's date is the start
-			// of episode 2 (not just any day within it) so this only fires once even
-			// if the localStorage guard is ever cleared by a reinstall.
-			if (flow !== 'none') {
+			// second period, AS IT HAPPENS (selectedDate is today). The three guards
+			// together make this fire exactly once, at the right moment:
+			//   - flow !== 'none': only on a bleeding save, not symptom-only
+			//   - episodes[1].start === selectedDate: the day being saved IS the start
+			//     of the second period (not a later day within it)
+			//   - selectedDate === todayISO(): live logging, not historical backfill
+			//     or an edit of a past entry — which would waste Apple's limited
+			//     prompt allowance on a user who hasn't yet lived a full cycle.
+			if (flow !== 'none' && selectedDate === todayISO()) {
 				const episodes = detectEpisodesPublic(allEntries);
 				if (episodes.length === 2 && episodes[1].start === selectedDate) {
 					// Small delay so the save confirmation animates first.

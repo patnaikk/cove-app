@@ -260,13 +260,14 @@
 			successTick();
 			setTimeout(() => (justSaved = false), 2000);
 
-			// Fire the native review prompt when the user starts their second period.
-			// By this point they've completed a full cycle and returned — a strong
-			// satisfaction signal. We only do this when a bleeding day was just saved
-			// (not for symptoms-only entries) and exactly 2 episodes exist.
+			// Fire the native review prompt when the user logs the FIRST day of their
+			// second period. By that point they've completed a full cycle and returned
+			// — a strong satisfaction signal. We check that today's date is the start
+			// of episode 2 (not just any day within it) so this only fires once even
+			// if the localStorage guard is ever cleared by a reinstall.
 			if (flow !== 'none') {
 				const episodes = detectEpisodesPublic(allEntries);
-				if (episodes.length === 2) {
+				if (episodes.length === 2 && episodes[1].start === selectedDate) {
 					// Small delay so the save confirmation animates first.
 					setTimeout(() => { void maybeRequestReview(); }, 1500);
 				}

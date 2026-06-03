@@ -35,6 +35,7 @@
 		"@capacitor/local-notifications": "^8.2.0",
 		"@capacitor/preferences": "^8.0.1",
 		"@capacitor/share": "^8.0.1",
-		"@capgo/capacitor-pdf-generator": "^8.0.30"
+		"@capgo/capacitor-pdf-generator": "^8.0.30",
+		"cordova-plugin-purchase": "^13.16.1"
 	}
 }

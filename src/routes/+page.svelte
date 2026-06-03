@@ -13,7 +13,8 @@
 		getEntryByDate,
 		getAllEntries
 	} from '$lib/db/cycleRepository';
-	import { cycleStatusFor } from '$lib/report/analyze';
+	import { cycleStatusFor, detectEpisodesPublic } from '$lib/report/analyze';
+	import { maybeRequestReview } from '$lib/ui/review';
 	import {
 		FLOW_INTENSITIES,
 		SYMPTOM_GROUPS,
@@ -258,6 +259,18 @@
 			justSaved = true;
 			successTick();
 			setTimeout(() => (justSaved = false), 2000);
+
+			// Fire the native review prompt when the user starts their second period.
+			// By this point they've completed a full cycle and returned — a strong
+			// satisfaction signal. We only do this when a bleeding day was just saved
+			// (not for symptoms-only entries) and exactly 2 episodes exist.
+			if (flow !== 'none') {
+				const episodes = detectEpisodesPublic(allEntries);
+				if (episodes.length === 2) {
+					// Small delay so the save confirmation animates first.
+					setTimeout(() => { void maybeRequestReview(); }, 1500);
+				}
+			}
 		} catch (e) {
 			console.error('[vault/db] save failed:', e);
 			saveError = true;

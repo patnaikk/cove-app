@@ -110,6 +110,11 @@ function median(nums: number[]): number | null {
 	return s.length % 2 ? s[mid] : Math.round((s[mid - 1] + s[mid]) / 2);
 }
 
+// Exported for the review-prompt trigger in the Today screen.
+export function detectEpisodesPublic(entries: CycleEntry[]): PeriodEpisode[] {
+	return detectEpisodes([...entries].sort((a, b) => a.date.localeCompare(b.date)));
+}
+
 function detectEpisodes(sorted: CycleEntry[]): PeriodEpisode[] {
 	const bleeding = sorted.filter((e) => e.flow_intensity !== 'none');
 	const episodes: PeriodEpisode[] = [];

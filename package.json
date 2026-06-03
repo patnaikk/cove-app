@@ -35,7 +35,6 @@
 		"@capacitor/local-notifications": "^8.2.0",
 		"@capacitor/preferences": "^8.0.1",
 		"@capacitor/share": "^8.0.1",
-		"@capgo/capacitor-pdf-generator": "^8.0.30",
-		"capacitor-rate-app": "^4.0.3"
+		"@capgo/capacitor-pdf-generator": "^8.0.30"
 	}
 }

@@ -1,6 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 
-// Ask iOS to show the native "Rate this app" prompt.
+// Ask iOS to show the native "Rate this app" prompt via our thin inline
+// ReviewPlugin (ReviewPlugin.swift in the Xcode project).
 //
 // Rules:
 // - Only fires on device (no-op in browser dev)
@@ -23,8 +24,11 @@ export async function maybeRequestReview(): Promise<void> {
 		// Belt-and-suspenders: don't call the plugin if we already did.
 		if (localStorage.getItem(REVIEW_ASKED_KEY) === '1') return;
 
-		const { RateApp } = await import('capacitor-rate-app');
-		await RateApp.requestReview();
+		// Call our inline Swift plugin directly — no npm package required.
+		// ReviewPlugin.swift lives in ios/App/App/ and is compiled into the
+		// Xcode project automatically as part of the App target.
+		const plugins = (Capacitor as unknown as { Plugins: Record<string, Record<string, () => Promise<void>>> }).Plugins;
+		await plugins['ReviewPlugin']['requestReview']();
 
 		// Mark as asked so we never prompt again on this install.
 		localStorage.setItem(REVIEW_ASKED_KEY, '1');

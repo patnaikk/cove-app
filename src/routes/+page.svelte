@@ -26,7 +26,7 @@
 		type Severity,
 		type Mood
 	} from '$lib/db/schema';
-	import { humanize, todayISO, shiftISO, friendlyDate, longDate } from '$lib/ui/format';
+	import { humanize, todayISO, shiftISO, friendlyDate, longDate, daysBetween } from '$lib/ui/format';
 	import { getWeightUnit, kgToDisplay, displayToKg } from '$lib/ui/preferences.svelte';
 	import { selectionTick, successTick } from '$lib/ui/haptics';
 	import { page } from '$app/state';
@@ -261,17 +261,26 @@
 			setTimeout(() => (justSaved = false), 2000);
 
 			// Fire the native review prompt when the user logs the FIRST day of their
-			// second period, AS IT HAPPENS (selectedDate is today). The three guards
-			// together make this fire exactly once, at the right moment:
+			// second period, AS IT HAPPENS (selectedDate is today). The guards together
+			// make this fire exactly once, at the right moment:
 			//   - flow !== 'none': only on a bleeding save, not symptom-only
-			//   - episodes[1].start === selectedDate: the day being saved IS the start
-			//     of the second period (not a later day within it)
 			//   - selectedDate === todayISO(): live logging, not historical backfill
-			//     or an edit of a past entry — which would waste Apple's limited
-			//     prompt allowance on a user who hasn't yet lived a full cycle.
+			//     or an edit of a past entry (which would waste Apple's limited prompt
+			//     allowance on a user who hasn't yet lived a full cycle)
+			//   - episodes[1].start === selectedDate: the day being saved IS the start
+			//     of the second episode (not a later day within it)
+			//   - gap >= 14 days between the two episode starts: confirms this is a
+			//     genuine NEW period, not the first period resuming after a missed day.
+			//     detectEpisodes splits on any 2+ day gap, so a skipped mid-period day
+			//     would otherwise look like a second episode. No real cycle is < 21 days,
+			//     so 14 cleanly excludes logging-gap splits while admitting any true cycle.
 			if (flow !== 'none' && selectedDate === todayISO()) {
 				const episodes = detectEpisodesPublic(allEntries);
-				if (episodes.length === 2 && episodes[1].start === selectedDate) {
+				if (
+					episodes.length === 2 &&
+					episodes[1].start === selectedDate &&
+					daysBetween(episodes[0].start, episodes[1].start) >= 14
+				) {
 					// Small delay so the save confirmation animates first.
 					setTimeout(() => { void maybeRequestReview(); }, 1500);
 				}

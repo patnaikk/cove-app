@@ -53,6 +53,9 @@
 				if (!wasBackgrounded) return; // initial activation — first load handles it
 				wasBackgrounded = false;
 				try {
+					// Brief grace period so any in-flight autosave write triggered by the
+					// visibilitychange flush can complete before we close the connection.
+					await new Promise(r => setTimeout(r, 300));
 					await resetDb();
 					await ensureDb();
 				} catch (e) {

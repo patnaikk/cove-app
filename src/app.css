@@ -30,7 +30,7 @@
 	/* Severity ramp — one calm sage family deepening with intensity */
 	--sev-1-bg: #e7ede9;
 	--sev-1-ink: #2c4339;
-	--sev-2-bg: #6f9384;
+	--sev-2-bg: #557a6a; /* darkened from #6f9384 so white ink passes 4.5:1 (4.8:1) */
 	--sev-2-ink: #ffffff;
 	--sev-3-bg: #3e5c50;
 	--sev-3-ink: #ffffff;
@@ -71,6 +71,8 @@
 	/* Soften the "mild" chip so it doesn't glare on a dark field. */
 	--sev-1-bg: #25342d;
 	--sev-1-ink: #cfe0d6;
+	/* "No flow" swatch: the light token reads as a glaring white dot on dark. */
+	--flow-none: #383d41;
 }
 
 * {

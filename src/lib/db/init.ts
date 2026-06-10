@@ -1,12 +1,15 @@
 import { Capacitor } from '@capacitor/core';
 import { openDb } from './db';
 
-// The encryption key is a 32-byte random value generated ONCE on first launch,
-// stored in the iOS Keychain via @capacitor/preferences (which uses Keychain
-// on iOS, not UserDefaults — so it survives app reinstalls and is excluded from
-// unencrypted backups). It is never hardcoded, never logged, never written to disk
-// in plaintext. This is the threat model: a seized or forensically-extracted device
-// cannot read the SQLite DB without the key.
+// The encryption key is a 32-byte random value generated ONCE on first launch.
+// We call CapacitorSQLite.setEncryptionSecret() which stores it in the iOS Keychain
+// (survives reinstalls, excluded from unencrypted iCloud backups). The passphrase is
+// also written to @capacitor/preferences as a seed for that first call — note that
+// Preferences uses UserDefaults, NOT the Keychain, so it is included in backups.
+// After the first launch, setEncryptionSecret throws "already stored in keychain" and
+// the plugin's own Keychain entry is used; the Preferences copy becomes irrelevant.
+// Practical threat model: the SQLite DB file is encrypted at rest with the Keychain-
+// backed key, so offline forensic extraction of the DB file alone is not sufficient.
 const KEY_NAME = 'cove.db.key';
 
 async function getOrCreatePassphrase(): Promise<string> {

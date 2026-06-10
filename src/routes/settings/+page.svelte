@@ -18,8 +18,9 @@
 	import { ensureDb } from '$lib/db/init';
 	import { buildCsv } from '$lib/report/csv';
 	import { downloadText } from '$lib/report/export';
-	import { isPdfUnlocked, restorePurchases } from '$lib/billing/entitlement';
+	import { isPdfUnlocked, restorePurchases, getBillingCacheReady } from '$lib/billing/entitlement';
 	import { todayISO } from '$lib/ui/format';
+	import { Capacitor } from '@capacitor/core';
 
 	const UNIT_LABEL: Record<WeightUnit, string> = { kg: 'kg', lb: 'lb' };
 	const UNIT_LONG: Record<WeightUnit, string> = {
@@ -36,7 +37,14 @@
 	const appearance = $derived(getAppearance());
 	const reminderOn = $derived(getReminderEnabled());
 	const reminderTime = $derived(getReminderTime());
-	const APP_VERSION = '1.0';
+	let appVersion = $state('1.0');
+	$effect(() => {
+		if (Capacitor.isNativePlatform()) {
+			import('@capacitor/app').then(({ App }) =>
+				App.getInfo().then((info) => { appVersion = info.version; }).catch(() => {})
+			);
+		}
+	});
 
 	let reminderMsg = $state<string | null>(null);
 
@@ -72,7 +80,12 @@
 		setAppearance(a);
 	}
 
-	const pdfUnlocked = $derived(isPdfUnlocked());
+	let pdfUnlocked = $state(isPdfUnlocked());
+	// Re-read once the persisted entitlement cache has loaded — on a cold launch the
+	// synchronous read above can run before billing init restores the cached unlock.
+	$effect(() => {
+		getBillingCacheReady().then(() => { pdfUnlocked = isPdfUnlocked(); });
+	});
 	let restoreMsg = $state<string | null>(null);
 	let restoreBusy = $state(false);
 
@@ -81,6 +94,7 @@
 		restoreMsg = null;
 		try {
 			const found = await restorePurchases();
+			pdfUnlocked = isPdfUnlocked(); // refresh row immediately after restore
 			restoreMsg = found ? 'Purchase restored.' : 'No previous purchase found.';
 		} catch {
 			restoreMsg = 'Restore failed — please try again.';
@@ -282,7 +296,7 @@
 		{/if}
 	</p>
 
-	<p class="version">Cove · Version {APP_VERSION}</p>
+	<p class="version">Cove · Version {appVersion}</p>
 </div>
 
 <style>

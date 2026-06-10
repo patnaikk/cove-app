@@ -199,3 +199,22 @@ export function setOnboarded(): void {
 		// best-effort
 	}
 }
+
+// Backup nudge: shown once after ≥30 logged days, dismissed permanently.
+const BACKUP_DISMISSED_KEY = 'vault.pref.backupNudgeDismissed';
+
+export function isBackupNudgeDismissed(): boolean {
+	try {
+		return localStorage.getItem(BACKUP_DISMISSED_KEY) === '1';
+	} catch {
+		return true; // if storage is broken, stay out of the user's way
+	}
+}
+
+export function dismissBackupNudge(): void {
+	try {
+		localStorage.setItem(BACKUP_DISMISSED_KEY, '1');
+	} catch {
+		// best-effort
+	}
+}

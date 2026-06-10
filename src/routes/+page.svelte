@@ -27,10 +27,11 @@
 		type Mood
 	} from '$lib/db/schema';
 	import { humanize, todayISO, shiftISO, friendlyDate, longDate, daysBetween } from '$lib/ui/format';
-	import { getWeightUnit, kgToDisplay, displayToKg } from '$lib/ui/preferences.svelte';
+	import { getWeightUnit, kgToDisplay, displayToKg, isBackupNudgeDismissed, dismissBackupNudge } from '$lib/ui/preferences.svelte';
 	import { selectionTick, successTick } from '$lib/ui/haptics';
+	import { swipeX, longPress } from '$lib/ui/swipe';
 	import { page } from '$app/state';
-	import { goto } from '$app/navigation';
+	import { beforeNavigate } from '$app/navigation';
 	import { untrack } from 'svelte';
 
 	const flowColors: Record<FlowIntensity, string> = {
@@ -55,7 +56,10 @@
 		const param = page.url.searchParams.get('date');
 		const target = param ? clampToToday(param) : todayISO();
 		untrack(() => {
-			if (target !== selectedDate) selectedDate = target;
+			if (target !== selectedDate) {
+				flushSave(); // payload is built synchronously, so it captures the OLD day
+				selectedDate = target;
+			}
 		});
 	});
 	let existingId = $state<string | null>(null);
@@ -67,6 +71,11 @@
 	let mood = $state<Mood[]>([]);
 	let weight = $state<string>('');
 	let notes = $state('');
+
+	// Occasional-use sections stay collapsed to keep the daily scroll short; they
+	// auto-open when the loaded day already has a value (so data is never hidden).
+	let weightOpen = $state(false);
+	let notesOpen = $state(false);
 
 	let saving = $state(false);
 	let justSaved = $state(false);
@@ -106,6 +115,41 @@
 	const isToday = $derived(selectedDate === todayISO());
 	const weightUnit = $derived(getWeightUnit());
 	const countIn = (keys: readonly string[]) => keys.filter((k) => symptomMap[k]).length;
+
+	// Soft plausibility check: outside 25–250 kg (55–551 lb) the value is almost
+	// certainly a typo (e.g. 638 instead of 63.8). Block nothing — just ask.
+	const weightWarning = $derived.by(() => {
+		const raw = String(weight ?? '').trim();
+		if (!raw) return null;
+		const v = Number(raw);
+		if (!Number.isFinite(v) || v <= 0) return null;
+		const kg = displayToKg(v);
+		if (kg < 25 || kg > 250) {
+			return weightUnit === 'lb'
+				? 'That looks outside the typical range (55–551 lb) — double-check the value.'
+				: 'That looks outside the typical range (25–250 kg) — double-check the value.';
+		}
+		return null;
+	});
+
+	// Focus only when the section was just opened by an "Add …" tap — never on a
+	// day load that happens to have data, which would pop the keyboard uninvited.
+	let wantFocus = false;
+	function openWeight() {
+		selectionTick();
+		wantFocus = true;
+		weightOpen = true;
+	}
+	function openNotes() {
+		selectionTick();
+		wantFocus = true;
+		notesOpen = true;
+	}
+	function focusOnMount(el: HTMLElement) {
+		if (!wantFocus) return;
+		wantFocus = false;
+		setTimeout(() => el.focus(), 30);
+	}
 
 	// Keep a focused field visible above the keyboard (also helps in-browser).
 	function scrollFocus(e: FocusEvent) {
@@ -160,6 +204,8 @@
 			} else {
 				reset();
 			}
+			weightOpen = weight !== '';
+			notesOpen = notes.trim().length > 0;
 			syncGroupOpen();
 		} catch (e) {
 			if (gen !== loadGen) return;
@@ -178,6 +224,54 @@
 		load(selectedDate);
 	});
 
+	// ── Autosave ──────────────────────────────────────────────────────────────
+	// Every edit schedules a debounced save; navigating away (day step, tab
+	// switch, app background) flushes it immediately. There is no Save button —
+	// edits can never be silently lost.
+	const AUTOSAVE_MS = 600;
+	let saveTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function scheduleSave() {
+		clearTimeout(saveTimer);
+		saveTimer = setTimeout(() => {
+			saveTimer = undefined;
+			void save();
+		}, AUTOSAVE_MS);
+	}
+
+	// save() builds its payload synchronously from current state, so calling this
+	// right BEFORE selectedDate changes still writes to the day being left.
+	function flushSave() {
+		if (saveTimer === undefined) return;
+		clearTimeout(saveTimer);
+		saveTimer = undefined;
+		void save();
+	}
+
+	beforeNavigate(() => flushSave());
+
+	// Flush when iOS backgrounds the webview — the OS may kill it at any point after.
+	// On foreground, snap to today if the date rolled over while the app was suspended
+	// (e.g. app left open overnight): if the user was on "today" and today changed,
+	// advance so they're logging the correct day rather than yesterday.
+	$effect(() => {
+		let wasOnToday = selectedDate === todayISO();
+		const onVisibility = () => {
+			if (document.visibilityState === 'hidden') {
+				wasOnToday = selectedDate === todayISO();
+				flushSave();
+			} else {
+				const today = todayISO();
+				if (wasOnToday && selectedDate !== today) {
+					flushSave();
+					selectedDate = today;
+				}
+			}
+		};
+		document.addEventListener('visibilitychange', onVisibility);
+		return () => document.removeEventListener('visibilitychange', onVisibility);
+	});
+
 	// Tap cycles a symptom: off -> mild -> moderate -> severe -> off
 	function cycleSymptom(key: Symptom) {
 		selectionTick();
@@ -186,37 +280,59 @@
 		const copy = { ...symptomMap };
 		if (next === undefined) {
 			delete copy[key];
-			// Hide tip when symptom is deselected
 			if (activeTip === key) activeTip = null;
 		} else {
 			copy[key] = next;
-			// Show this symptom's tip (hides any other open tip)
 			activeTip = SYMPTOM_TIPS[key] ? key : null;
 		}
 		symptomMap = copy;
+		scheduleSave();
+	}
+
+	// Long-press clears a logged symptom instantly — no need to cycle through severities.
+	function clearSymptom(key: Symptom) {
+		if (!symptomMap[key]) return; // not logged — nothing to clear
+		selectionTick();
+		const copy = { ...symptomMap };
+		delete copy[key];
+		if (activeTip === key) activeTip = null;
+		symptomMap = copy;
+		scheduleSave();
 	}
 
 	function selectFlow(level: FlowIntensity) {
 		selectionTick();
 		flow = level;
+		scheduleSave();
 	}
 
 	function toggleMood(value: Mood) {
 		selectionTick();
 		mood = mood.includes(value) ? mood.filter((v) => v !== value) : [...mood, value];
+		scheduleSave();
 	}
 
 	function goPrev() {
 		selectionTick();
+		flushSave();
 		selectedDate = shiftISO(selectedDate, -1);
 	}
 	function goNext() {
 		if (isToday) return;
 		selectionTick();
+		flushSave();
 		selectedDate = shiftISO(selectedDate, 1);
 	}
 
-	async function save() {
+	// Saves are serialized on a chain: each builds its payload synchronously (so a
+	// flush right before a day change still captures the day being left), then
+	// awaits any earlier write. The target row is resolved from the DB by DATE at
+	// write time, never from component state — so a queued save for yesterday can
+	// never update today's row, and a flush during a debounced create can never
+	// insert the same day twice.
+	let saveChain: Promise<void> = Promise.resolve();
+
+	function save(): Promise<void> {
 		// Don't create a blank record for a day the user never actually logged anything on.
 		const hasContent =
 			flow !== 'none' ||
@@ -224,10 +340,8 @@
 			mood.length > 0 ||
 			String(weight ?? '').trim() !== '' ||
 			notes.trim().length > 0;
-		if (!existingId && !hasContent) return;
+		const hadEntry = existingId !== null;
 
-		saving = true;
-		saveError = false;
 		const symptoms = (Object.entries(symptomMap) as [Symptom, Severity][]).map(
 			([key, severity]) => ({ key, severity })
 		);
@@ -248,12 +362,26 @@
 			weight: weightKg,
 			notes
 		};
+
+		saveChain = saveChain.then(() => doSave(payload, hasContent, hadEntry));
+		return saveChain;
+	}
+
+	async function doSave(
+		payload: Parameters<typeof addEntry>[0],
+		hasContent: boolean,
+		hadEntry: boolean
+	) {
+		saving = true;
+		saveError = false;
 		try {
-			if (existingId) {
-				await updateEntry(existingId, payload);
+			const existing = await getEntryByDate(payload.date);
+			if (existing) {
+				await updateEntry(existing.id, payload);
 			} else {
+				if (!hasContent && !hadEntry) return; // nothing logged, nothing stored
 				const created = await addEntry(payload);
-				existingId = created.id;
+				if (selectedDate === payload.date) existingId = created.id;
 			}
 			allEntries = await getAllEntries();
 			justSaved = true;
@@ -274,11 +402,11 @@
 			//     detectEpisodes splits on any 2+ day gap, so a skipped mid-period day
 			//     would otherwise look like a second episode. No real cycle is < 21 days,
 			//     so 14 cleanly excludes logging-gap splits while admitting any true cycle.
-			if (flow !== 'none' && selectedDate === todayISO()) {
+			if (payload.flow_intensity !== 'none' && payload.date === todayISO()) {
 				const episodes = detectEpisodesPublic(allEntries);
 				if (
 					episodes.length === 2 &&
-					episodes[1].start === selectedDate &&
+					episodes[1].start === payload.date &&
 					daysBetween(episodes[0].start, episodes[1].start) >= 14
 				) {
 					// Small delay so the save confirmation animates first.
@@ -295,8 +423,22 @@
 
 	let confirmingDelete = $state(false);
 
+	// Backup nudge: shown once on Today after ≥30 logged days, dismissed permanently.
+	const BACKUP_THRESHOLD = 30;
+	let backupNudgeDismissed = $state(isBackupNudgeDismissed());
+	const showBackupNudge = $derived(
+		!backupNudgeDismissed && allEntries.length >= BACKUP_THRESHOLD
+	);
+	function dismissNudge() {
+		dismissBackupNudge();
+		backupNudgeDismissed = true;
+	}
+
 	async function remove() {
 		if (!existingId) return;
+		// A queued autosave firing after the delete would resurrect the entry.
+		clearTimeout(saveTimer);
+		saveTimer = undefined;
 		saveError = false;
 		try {
 			await deleteEntry(existingId);
@@ -311,14 +453,10 @@
 	}
 </script>
 
-<div class="page">
+<!-- Swipe anywhere on the day to page through history — buttons remain for a11y. -->
+<div class="page" use:swipeX={{ onLeft: goNext, onRight: goPrev }}>
 	<header class="nav-bar">
 		<h1 class="large-title">{friendlyDate(selectedDate)}</h1>
-		<!-- The flare quick-log always records *today*, so only offer it on today —
-		     otherwise it silently logs to the wrong day while you browse history. -->
-		{#if isToday}
-			<a class="bar-btn" href="/flare">Log pain</a>
-		{/if}
 	</header>
 	<div class="date-row">
 		<span class="long-date">{longDate(selectedDate)}</span>
@@ -335,6 +473,22 @@
 
 	{#if !loading && !loadError}
 		<div class="cycle-status" class:bleeding={status.kind === 'period'}>{statusText}</div>
+	{/if}
+
+	{#if showBackupNudge}
+		<div class="backup-nudge" role="note">
+			<div class="nudge-body">
+				<span class="nudge-icon" aria-hidden="true">💾</span>
+				<div>
+					<p class="nudge-title">Back up your data</p>
+					<p class="nudge-sub">You've logged {allEntries.length} days — export a CSV so you don't lose it if something happens to this phone.</p>
+				</div>
+			</div>
+			<div class="nudge-actions">
+				<a class="nudge-cta" href="/settings">Export in Settings</a>
+				<button class="nudge-dismiss" onclick={dismissNudge} aria-label="Dismiss backup reminder">Not now</button>
+			</div>
+		</div>
 	{/if}
 
 	{#if loading}
@@ -368,6 +522,13 @@
 			</div>
 		</section>
 
+		{#if isToday}
+			<a class="flare-card" href="/flare">
+				<span class="flare-title">Log a pain flare</span>
+				<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+			</a>
+		{/if}
+
 		<section class="card">
 			<h2>Symptoms</h2>
 			<p class="hint">Tap to cycle: mild → moderate → severe</p>
@@ -395,8 +556,9 @@
 									class:sev-2={sev === 2}
 									class:sev-3={sev === 3}
 									aria-pressed={!!sev}
-									aria-label={sev ? `${humanize(key)}, ${SEVERITY_LABELS[sev]}` : humanize(key)}
+									aria-label={sev ? `${humanize(key)}, ${SEVERITY_LABELS[sev]}, long-press to clear` : humanize(key)}
 									onclick={() => cycleSymptom(key)}
+									use:longPress={() => clearSymptom(key)}
 								>
 									{humanize(key)}
 									{#if sev}<span class="sev-tag">· {SEVERITY_LABELS[sev]}</span>{/if}
@@ -422,27 +584,46 @@
 			</div>
 		</section>
 
-		<section class="card">
-			<h2>Weight</h2>
-			<div class="weight-row">
-				<input
-					type="number"
-					inputmode="decimal"
-					bind:value={weight}
-					onfocus={scrollFocus}
-					placeholder="Optional"
-					aria-label="Weight in {weightUnit}"
-					min="0"
-					step="0.1"
-				/>
-				<span class="unit">{weightUnit}</span>
-			</div>
-		</section>
+		{#if weightOpen}
+			<section class="card">
+				<h2>Weight</h2>
+				<div class="weight-row">
+					<input
+						type="number"
+						inputmode="decimal"
+						bind:value={weight}
+						use:focusOnMount
+						onfocus={scrollFocus}
+						oninput={scheduleSave}
+						placeholder="Optional"
+						aria-label="Weight in {weightUnit}"
+						min="0"
+						step="0.1"
+					/>
+					<span class="unit">{weightUnit}</span>
+				</div>
+				{#if weightWarning}
+					<p class="weight-warning" role="alert">{weightWarning}</p>
+				{/if}
+			</section>
+		{:else}
+			<button class="add-row" onclick={openWeight}>
+				<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+				Add weight
+			</button>
+		{/if}
 
-		<section class="card">
-			<h2>Notes</h2>
-			<textarea bind:value={notes} onfocus={scrollFocus} rows="3" placeholder="Anything worth remembering…" aria-label="Notes"></textarea>
-		</section>
+		{#if notesOpen}
+			<section class="card">
+				<h2>Notes</h2>
+				<textarea bind:value={notes} use:focusOnMount onfocus={scrollFocus} oninput={scheduleSave} rows="3" placeholder="Anything worth remembering…" aria-label="Notes"></textarea>
+			</section>
+		{:else}
+			<button class="add-row" onclick={openNotes}>
+				<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+				Add note
+			</button>
+		{/if}
 
 		{#if existingId}
 			{#if confirmingDelete}
@@ -462,23 +643,27 @@
 	{/if}
 </div>
 
-{#if !loadError}
-	<div class="footer">
+{#if !loadError && !loading}
+	<div class="autosave-bar" aria-live="polite" aria-atomic="true">
 		{#if saveError}
-			<p class="save-error" role="alert">Couldn’t save — please try again.</p>
+			<span class="as-error">
+				Couldn’t save —
+				<button class="as-retry" onclick={() => void save()}>Retry</button>
+			</span>
+		{:else if saving}
+			<span class="as-saving">Saving…</span>
+		{:else if justSaved}
+			<span class="as-saved">
+				<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
+				Saved
+			</span>
 		{/if}
-		<button class="save" class:saved={justSaved} onclick={save} disabled={saving || loading}>
-			{#if justSaved}
-				<svg class="check" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
-				<span>Saved</span>
-			{:else if saving}Saving…{:else if existingId}Update entry{:else}Save entry{/if}
-		</button>
 	</div>
 {/if}
 
 <style>
 	.page {
-		padding: 0 16px 160px;
+		padding: 0 16px calc(72px + var(--safe-bottom));
 	}
 
 	/* Navigation bar with a left-aligned Large Title (34pt) + trailing bar button. */
@@ -571,6 +756,67 @@
 		background: var(--line);
 	}
 
+	/* One-time backup nudge — warm amber attention callout, matches the clinical flag
+	   palette already defined in app.css (--attn-*). */
+	.backup-nudge {
+		margin-bottom: 20px;
+		padding: 14px 16px;
+		border-radius: var(--radius-card);
+		border: 1px solid var(--attn-line);
+		background: var(--attn-bg);
+	}
+	.nudge-body {
+		display: flex;
+		gap: 12px;
+		align-items: flex-start;
+	}
+	.nudge-icon {
+		font-size: 20px;
+		line-height: 1.2;
+		flex: none;
+	}
+	.nudge-title {
+		font-size: 14px;
+		font-weight: 600;
+		color: var(--attn-ink);
+		letter-spacing: -0.1px;
+	}
+	.nudge-sub {
+		margin-top: 3px;
+		font-size: 13px;
+		line-height: 1.45;
+		color: var(--attn-ink);
+		opacity: 0.85;
+	}
+	.nudge-actions {
+		display: flex;
+		align-items: center;
+		gap: 16px;
+		margin-top: 12px;
+		padding-left: 32px; /* align under text, past the icon */
+	}
+	.nudge-cta {
+		font-size: 14px;
+		font-weight: 600;
+		color: var(--attn-ink);
+		text-decoration: none;
+		border-bottom: 1px solid var(--attn-ink);
+		padding-bottom: 1px;
+		transition: opacity 0.12s;
+	}
+	.nudge-cta:active { opacity: 0.6; }
+	.nudge-dismiss {
+		font-size: 13px;
+		color: var(--attn-ink);
+		opacity: 0.7;
+		border: none;
+		background: none;
+		padding: 0;
+		min-height: 44px;
+		transition: opacity 0.12s;
+	}
+	.nudge-dismiss:active { opacity: 0.4; }
+
 	.loading {
 		padding: 48px 0;
 		text-align: center;
@@ -606,11 +852,59 @@
 	.retry:active {
 		opacity: 0.6;
 	}
-	.save-error {
-		margin: 0 0 10px;
-		text-align: center;
+	/* Passive autosave status strip — floats above the tab bar, invisible when idle. */
+	.autosave-bar {
+		position: fixed;
+		bottom: calc(56px + var(--safe-bottom));
+		left: 0;
+		right: 0;
+		max-width: 480px;
+		margin: 0 auto;
+		display: flex;
+		justify-content: center;
+		pointer-events: none;
+		padding: 8px 20px;
+	}
+	.as-saved,
+	.as-saving,
+	.as-error {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 5px 12px;
+		border-radius: var(--radius-pill);
 		font-size: 13px;
+		font-weight: 500;
+	}
+	.as-saved {
+		background: var(--accent-tint);
+		color: var(--accent-ink);
+		animation: as-fade 0.2s ease;
+	}
+	.as-saving {
+		color: var(--ink-faint);
+	}
+	.as-error {
+		background: color-mix(in srgb, var(--flow-heavy) 12%, transparent);
 		color: var(--flow-heavy);
+		pointer-events: auto;
+	}
+	.as-retry {
+		border: none;
+		background: none;
+		color: var(--flow-heavy);
+		font-size: 13px;
+		font-weight: 600;
+		text-decoration: underline;
+		padding: 0;
+		pointer-events: auto;
+	}
+	@keyframes as-fade {
+		from { opacity: 0; transform: translateY(4px); }
+		to   { opacity: 1; transform: translateY(0); }
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.as-saved { animation: none; }
 	}
 
 	/* iOS inset-grouped section: flat fill + hairline, continuous corner, no shadow. */
@@ -687,21 +981,25 @@
 	}
 
 	/* One-time entrance settle when arriving at Today (per session). */
-	.content.intro > .card {
+	.content.intro > .card,
+	.content.intro > .add-row {
 		opacity: 0;
 		animation: card-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 	}
-	.content.intro > .card:nth-child(1) {
+	.content.intro > :nth-child(1) {
 		animation-delay: 0.02s;
 	}
-	.content.intro > .card:nth-child(2) {
+	.content.intro > :nth-child(2) {
 		animation-delay: 0.07s;
 	}
-	.content.intro > .card:nth-child(3) {
+	.content.intro > :nth-child(3) {
 		animation-delay: 0.12s;
 	}
-	.content.intro > .card:nth-child(4) {
+	.content.intro > :nth-child(4) {
 		animation-delay: 0.17s;
+	}
+	.content.intro > :nth-child(5) {
+		animation-delay: 0.22s;
 	}
 	@keyframes card-in {
 		from {
@@ -714,7 +1012,8 @@
 		}
 	}
 	@media (prefers-reduced-motion: reduce) {
-		.content.intro > .card {
+		.content.intro > .card,
+		.content.intro > .add-row {
 			opacity: 1;
 			animation: none;
 		}
@@ -822,6 +1121,54 @@
 		.sym-tip { animation: none; }
 	}
 
+	/* Flare quick-action — slim inline row, visually subordinate to Flow + Symptoms. */
+	.flare-card {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 10px;
+		padding: 10px 14px;
+		margin-bottom: 12px;
+		border: 1px solid var(--accent-tint);
+		border-radius: var(--radius-control);
+		background: var(--accent-tint);
+		color: var(--accent);
+		text-decoration: none;
+		transition: opacity 0.12s;
+	}
+	.flare-card:active {
+		opacity: 0.7;
+	}
+	.flare-title {
+		font-size: 14px;
+		font-weight: 600;
+		letter-spacing: -0.1px;
+		color: var(--accent);
+	}
+
+	/* Collapsed occasional-use section: reads like a slim card-row, opens on tap. */
+	.add-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		width: 100%;
+		min-height: 50px;
+		padding: 0 16px;
+		margin-bottom: 16px;
+		border: 1px solid var(--line);
+		border-radius: var(--radius-card);
+		background: var(--surface);
+		color: var(--accent);
+		font-size: 15px;
+		font-weight: 600;
+		letter-spacing: -0.2px;
+		text-align: left;
+		transition: background 0.12s;
+	}
+	.add-row:active {
+		background: var(--surface-sunken);
+	}
+
 	.weight-row {
 		display: flex;
 		align-items: center;
@@ -847,6 +1194,12 @@
 	.weight-row input::-webkit-inner-spin-button {
 		-webkit-appearance: none;
 		margin: 0;
+	}
+	.weight-warning {
+		margin-top: 8px;
+		font-size: 13px;
+		line-height: 1.4;
+		color: var(--attn-ink);
 	}
 	.unit {
 		color: var(--ink-soft);
@@ -908,62 +1261,4 @@
 		color: #fff;
 	}
 
-	.footer {
-		position: fixed;
-		/* Sit directly above the persistent bottom tab bar. */
-		bottom: calc(56px + var(--safe-bottom));
-		left: 0;
-		right: 0;
-		max-width: 480px;
-		margin: 0 auto;
-		padding: 12px 20px 14px;
-		background: linear-gradient(to top, var(--bg) 78%, transparent);
-	}
-	.save {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		gap: 8px;
-		width: 100%;
-		min-height: 50px;
-		padding: 0 16px;
-		border: none;
-		border-radius: var(--radius-pill);
-		background: var(--accent-fill);
-		color: #fff;
-		font-size: 17px;
-		font-weight: 600;
-		letter-spacing: -0.2px;
-		transition:
-			background 0.2s ease,
-			transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
-	}
-	.save:active {
-		transform: scale(0.98);
-	}
-	.save:disabled {
-		opacity: 0.6;
-	}
-	/* Success micro-interaction: confirm with a check that springs in. */
-	.save.saved {
-		filter: brightness(0.9);
-	}
-	.save .check {
-		animation: check-pop 0.34s cubic-bezier(0.34, 1.56, 0.64, 1);
-	}
-	@keyframes check-pop {
-		0% {
-			transform: scale(0.4);
-			opacity: 0;
-		}
-		100% {
-			transform: scale(1);
-			opacity: 1;
-		}
-	}
-	@media (prefers-reduced-motion: reduce) {
-		.save .check {
-			animation: none;
-		}
-	}
 </style>

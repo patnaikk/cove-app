@@ -5,7 +5,7 @@
 	import { buildSummary, type ReportSummary, type Regularity } from '$lib/report/analyze';
 	import { buildCsv } from '$lib/report/csv';
 	import { downloadText, printReport } from '$lib/report/export';
-	import { isPdfUnlocked, devSetPdfUnlocked, purchasePdfUnlock } from '$lib/billing/entitlement';
+	import { isPdfUnlocked, devSetPdfUnlocked, purchasePdfUnlock, getPdfPrice, restorePurchases, getBillingCacheReady } from '$lib/billing/entitlement';
 	import { Capacitor } from '@capacitor/core';
 	import { humanize, todayISO, shiftISO, daysBetween, friendlyDate, mediumDate } from '$lib/ui/format';
 	import { getWeightUnit, kgToDisplay } from '$lib/ui/preferences.svelte';
@@ -186,7 +186,9 @@
 		try {
 			await ensureDb();
 			allEntries = await getAllEntries();
+			await getBillingCacheReady();
 			unlocked = isPdfUnlocked();
+			pdfPrice = getPdfPrice();
 			if (!rangeInitialized) {
 				rangeInitialized = true;
 				const picked = pickInitialRange(allEntries);
@@ -243,8 +245,31 @@
 		}
 	}
 
+	let sampleOpen = $state(false);
 	let purchasing = $state(false);
 	let purchaseError = $state('');
+	let pdfPrice = $state(getPdfPrice());
+
+	let restoring = $state(false);
+	let restoreMsg = $state('');
+
+	async function restoreFromPaywall() {
+		restoring = true;
+		restoreMsg = '';
+		try {
+			const found = await restorePurchases();
+			unlocked = isPdfUnlocked();
+			if (unlocked) {
+				successTick();
+			} else if (!found) {
+				restoreMsg = 'No previous purchase found.';
+			}
+		} catch {
+			restoreMsg = 'Restore failed — try again.';
+		} finally {
+			restoring = false;
+		}
+	}
 
 	async function unlock() {
 		purchaseError = '';
@@ -252,10 +277,17 @@
 			purchasing = true;
 			try {
 				await purchasePdfUnlock();
+				// purchasePdfUnlock now waits for the verified chain — read directly.
 				unlocked = isPdfUnlocked();
 				if (unlocked) successTick();
+				// If still false after waiting, the user cancelled — no error shown.
 			} catch (e: any) {
-				purchaseError = e?.message ?? 'Purchase failed. Please try again.';
+				const msg: string = (e?.message ?? '').toLowerCase();
+				if (msg.includes('not available') || msg.includes('not found')) {
+					purchaseError = 'Could not reach the App Store. Check your connection and try again.';
+				} else {
+					purchaseError = 'Purchase failed. Please try again.';
+				}
 			} finally {
 				purchasing = false;
 			}
@@ -568,6 +600,30 @@
 									<li>Your weight trend over the selected range</li>
 								{/if}
 							</ul>
+							<button
+								class="sample-toggle"
+								onclick={() => (sampleOpen = !sampleOpen)}
+								aria-expanded={sampleOpen}
+							>
+								{sampleOpen ? 'Hide example' : 'See what it looks like'}
+								<svg class="sample-chevron" class:open={sampleOpen} viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+							</button>
+							{#if sampleOpen}
+								<div class="sample-preview">
+									<p class="sample-label">Example — not your data</p>
+									<table class="sample-table">
+										<thead>
+											<tr><th>Symptom</th><th>Days</th><th>Typical</th><th>Peak</th><th>During period</th></tr>
+										</thead>
+										<tbody>
+											<tr><td>Cramps</td><td>8</td><td>Mild</td><td>Severe</td><td>6/8</td></tr>
+											<tr><td>Bloating</td><td>5</td><td>Mild</td><td>Moderate</td><td>3/5</td></tr>
+											<tr><td>Headache</td><td>4</td><td>Moderate</td><td>Moderate</td><td>1/4</td></tr>
+										</tbody>
+									</table>
+									<p class="sample-note">Your full report covers every symptom you've logged, mood patterns, weight trend, and a clinician-formatted PDF with fill-in fields for your appointment.</p>
+								</div>
+							{/if}
 							<p class="lock-privacy">
 								Unlocking only verifies your purchase with Apple — your logs never leave this device.
 							</p>
@@ -590,14 +646,21 @@
 				{#if pdfError}<p class="purchase-error" role="alert">{pdfError}</p>{/if}
 			{:else if reportableHistory}
 				<button class="btn primary" onclick={unlock} disabled={purchasing}>
-					{purchasing ? 'Opening…' : 'Unlock full report · $9.99'}
+					{purchasing ? 'Opening…' : `Unlock full report · ${pdfPrice}`}
 				</button>
 				{#if purchaseError}<p class="purchase-error">{purchaseError}</p>{/if}
 			{/if}
 		</div>
 
 		{#if !unlocked && reportableHistory}
-			<p class="paywall-note no-print">One-time $9.99 — no subscription, ever. Processed by Apple — <a class="paywall-eula" href="https://www.apple.com/legal/internet-services/itunes/dev/stdeula/" target="_blank" rel="noopener">Terms apply</a>.</p>
+			<button class="restore-link no-print" onclick={restoreFromPaywall} disabled={restoring}>
+				{restoring ? 'Checking…' : 'Already purchased? Restore'}
+			</button>
+			{#if restoreMsg}<p class="purchase-error">{restoreMsg}</p>{/if}
+		{/if}
+
+		{#if !unlocked && reportableHistory}
+			<p class="paywall-note no-print">One-time {pdfPrice} — no subscription, ever. Processed by Apple — <a class="paywall-eula" href="https://www.apple.com/legal/internet-services/itunes/dev/stdeula/" target="_blank" rel="noopener">Terms apply</a>.</p>
 		{:else if !unlocked}
 			<p class="paywall-note no-print">Your shareable report unlocks as you log — keep going.</p>
 		{/if}
@@ -1319,6 +1382,11 @@
 	.btn:active {
 		transform: scale(0.98);
 	}
+	.btn:disabled {
+		opacity: 0.55;
+		transform: none;
+		cursor: default;
+	}
 	.btn.ghost {
 		background: var(--surface);
 		border: 1px solid var(--line);
@@ -1409,6 +1477,61 @@
 		color: var(--ink);
 		font-weight: 600;
 	}
+	.sample-toggle {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		margin-top: 14px;
+		padding: 0;
+		border: none;
+		background: transparent;
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--accent);
+		min-height: 36px;
+	}
+	.sample-toggle:active {
+		opacity: 0.6;
+	}
+	.sample-chevron {
+		transition: transform 0.2s ease;
+	}
+	.sample-chevron.open {
+		transform: rotate(180deg);
+	}
+	.sample-preview {
+		margin-top: 10px;
+		padding: 12px;
+		border-radius: var(--radius-control);
+		background: var(--surface);
+		border: 1px solid var(--line);
+	}
+	.sample-label {
+		font-size: 10px;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: var(--ink-faint);
+		margin-bottom: 8px;
+	}
+	.sample-table {
+		font-size: 12px;
+	}
+	.sample-table th {
+		font-size: 10px;
+		padding: 4px 6px;
+	}
+	.sample-table td {
+		padding: 6px 6px;
+		font-size: 12px;
+		color: var(--ink);
+	}
+	.sample-note {
+		margin-top: 10px;
+		font-size: 12px;
+		line-height: 1.45;
+		color: var(--ink-soft);
+	}
 	.lock-privacy {
 		margin-top: 14px;
 		padding-top: 12px;
@@ -1416,6 +1539,25 @@
 		font-size: 12px;
 		line-height: 1.45;
 		color: var(--ink-faint);
+	}
+	.restore-link {
+		width: 100%;
+		margin-top: 12px;
+		padding: 0;
+		border: none;
+		background: transparent;
+		font-size: 14px;
+		color: var(--ink-soft);
+		text-align: center;
+		text-decoration: underline;
+		text-underline-offset: 2px;
+		min-height: 36px;
+	}
+	.restore-link:active {
+		opacity: 0.6;
+	}
+	.restore-link:disabled {
+		opacity: 0.5;
 	}
 	.paywall-note {
 		margin-top: 12px;

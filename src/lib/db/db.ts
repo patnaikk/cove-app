@@ -13,36 +13,20 @@ let dbConnection: SQLiteDBConnection | null = null;
 // the app-resume listener) both trying to createConnection with the same name.
 let opening: Promise<SQLiteDBConnection> | null = null;
 
-// The encryption passphrase must NEVER be hardcoded or written to disk in plaintext.
-// On device it comes from the iOS Keychain (unlocked via Face ID / PIN) and is
-// handed in here at open time. This module only receives it — it does not store it.
-export interface OpenDbOptions {
-	passphrase: string;
-}
-
 // Device only. Browser dev/preview uses localStore instead (see cycleRepository),
 // so this is never reached on web.
 //
-// SQLCipher: the Keychain-backed passphrase is registered via setEncryptionSecret
-// before createConnection so the plugin passes it to SQLCipher at open time.
-// capacitor.config.ts must have iosIsEncryption: true for the Swift layer to
-// accept the secret — without it the plugin ignores the passphrase entirely.
-export async function openDb(options: OpenDbOptions): Promise<SQLiteDBConnection> {
+// SQLCipher: the 256-bit Keychain-backed key is registered via setEncryptionSecret
+// in ensureEncryptionSecret() (see init.ts) BEFORE this runs, so the plugin hands it
+// to SQLCipher when it opens the connection in 'secret' mode below.
+// capacitor.config.ts must have iosIsEncryption: true for the Swift layer to honour
+// the secret — without it the plugin ignores encryption entirely.
+export async function openDb(): Promise<SQLiteDBConnection> {
 	if (dbConnection) return dbConnection;
 	// If an open is already in flight, await it instead of starting a second one.
 	if (opening) return opening;
 
 	opening = (async () => {
-		try {
-			await CapacitorSQLite.setEncryptionSecret({ passphrase: options.passphrase });
-		} catch (e: any) {
-			// On every launch after the first, the passphrase is already stored in the
-			// keychain — the plugin throws rather than silently succeeding. That's fine;
-			// the key is already registered and SQLCipher will use it.
-			if (!String(e?.message ?? e?.errorMessage ?? '').includes('already stored in keychain')) {
-				throw e;
-			}
-		}
 		await CapacitorSQLite.addUpgradeStatement({ database: DB_NAME, upgrade: MIGRATIONS });
 
 		// The plugin keeps a native connection registry that can outlive this JS

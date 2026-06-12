@@ -19,7 +19,7 @@
 
 	<article class="doc">
 		<h1 class="large-title">Privacy Policy</h1>
-		<p class="updated">Last updated 31 May 2026</p>
+		<p class="updated">Last updated 12 June 2026</p>
 
 		<p class="intro">
 			Cove is built so your health information stays yours. This policy explains, in
@@ -36,9 +36,18 @@
 		<h2>Where your data lives</h2>
 		<p>
 			Everything you log — cycle days, symptoms, mood, weight, and notes — is saved in a
-			database on your own device. iOS encrypts app data at rest using Apple’s built-in
-			Data Protection when your device is locked. Your data is never uploaded, backed up
-			to a cloud by us, or synced to another device.
+			database on your own device, encrypted with AES-256, the same standard used to
+			protect financial and government data.
+		</p>
+		<p>
+			The encryption key is generated randomly on your phone the first time you open Cove
+			and is held in the iOS Keychain — the hardware-protected store Apple provides for
+			passwords and keys. The key stays on your device and is never sent to us or anyone
+			else: we have no copy of it and no way to read your data. As a second layer, iOS
+			encrypts the file again at rest whenever your phone is locked.
+		</p>
+		<p>
+			Your data is never uploaded, backed up to a cloud by us, or synced to another device.
 		</p>
 
 		<h2>Network access</h2>

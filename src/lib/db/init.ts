@@ -1,49 +1,63 @@
 import { Capacitor } from '@capacitor/core';
+import { CapacitorSQLite } from '@capacitor-community/sqlite';
 import { openDb } from './db';
 
-// The encryption key is a 32-byte random value generated ONCE on first launch.
-// We call CapacitorSQLite.setEncryptionSecret() which stores it in the iOS Keychain
-// (survives reinstalls, excluded from unencrypted iCloud backups). The passphrase is
-// also written to @capacitor/preferences as a seed for that first call — note that
-// Preferences uses UserDefaults, NOT the Keychain, so it is included in backups.
-// After the first launch, setEncryptionSecret throws "already stored in keychain" and
-// the plugin's own Keychain entry is used; the Preferences copy becomes irrelevant.
-// Practical threat model: the SQLite DB file is encrypted at rest with the Keychain-
-// backed key, so offline forensic extraction of the DB file alone is not sufficient.
-const KEY_NAME = 'cove.db.key';
+// The database is encrypted with SQLCipher (AES-256). The key is a 32-byte
+// (256-bit) cryptographically-random value generated ONCE, on first launch, and
+// registered with the SQLite plugin via setEncryptionSecret — which stores it in
+// the iOS Keychain, Apple's hardware-protected store for passwords and keys.
+//
+// The key lives ONLY in the Keychain. It is never written to disk in plaintext,
+// never sent off the device, and we (the developers) have no copy and no way to
+// read it. Offline extraction of the database file alone cannot decrypt it.
+//
+// Earlier builds also seeded the key into @capacitor/preferences — which uses
+// UserDefaults, NOT the Keychain, and so could ride along in an unencrypted device
+// backup. We no longer write it there, and we purge any leftover copy on launch
+// (see ensureEncryptionSecret) so no key material survives outside the Keychain.
+const LEGACY_KEY_NAME = 'cove.db.key';
 
-async function getOrCreatePassphrase(): Promise<string> {
-	const { Preferences } = await import('@capacitor/preferences');
+async function ensureEncryptionSecret(): Promise<void> {
+	const stored = (await CapacitorSQLite.isSecretStored()).result;
+	if (!stored) {
+		// First launch — generate a 256-bit random key and register it in the Keychain.
+		const bytes = crypto.getRandomValues(new Uint8Array(32));
+		const passphrase = Array.from(bytes)
+			.map((b) => b.toString(16).padStart(2, '0'))
+			.join('');
+		try {
+			await CapacitorSQLite.setEncryptionSecret({ passphrase });
+		} catch (e: any) {
+			// Edge: the secret was registered between the check above and this call.
+			// The Keychain copy is authoritative, so a redundant call that throws
+			// "already stored in keychain" is fine to swallow.
+			if (!String(e?.message ?? e?.errorMessage ?? '').includes('already stored in keychain')) {
+				throw e;
+			}
+		}
+	}
 
-	const { value } = await Preferences.get({ key: KEY_NAME });
-	if (value) return value;
-
-	// First launch — generate a cryptographically random 32-byte hex key.
-	const bytes = crypto.getRandomValues(new Uint8Array(32));
-	const passphrase = Array.from(bytes)
-		.map((b) => b.toString(16).padStart(2, '0'))
-		.join('');
-
-	// Persist BEFORE returning. If this throws (e.g. Keychain locked at boot),
-	// we propagate — better to surface "couldn't open" than to silently open a
-	// blank DB on the next launch with a freshly-generated, non-matching key.
-	await Preferences.set({ key: KEY_NAME, value: passphrase });
-	// Verify the write landed — Keychain can accept the call but silently drop it
-	// if the device is in a restricted state (e.g. before first unlock after reboot).
-	const { value: written } = await Preferences.get({ key: KEY_NAME });
-	if (!written) throw new Error('[cove] Passphrase write did not persist — Keychain unavailable');
-	return passphrase;
+	// Best-effort hygiene: delete the legacy plaintext key seed from Preferences
+	// (UserDefaults) so it can no longer appear in a device backup. Safe to run every
+	// launch — a missing key is a no-op, and the Keychain copy is what actually matters.
+	try {
+		const { Preferences } = await import('@capacitor/preferences');
+		await Preferences.remove({ key: LEGACY_KEY_NAME });
+	} catch {
+		// Non-fatal: this is cleanup, not part of opening the database.
+	}
 }
 
 let ready: Promise<void> | null = null;
 
-// On device, open the encrypted SQLite database with the Keychain-backed key.
-// In the browser, the localStorage dev store needs no initialisation.
+// On device, register the Keychain-backed key (first launch only) and open the
+// encrypted SQLite database. In the browser, the localStorage dev store needs no
+// initialisation.
 export function ensureDb(): Promise<void> {
 	if (!ready) {
 		const attempt = Capacitor.isNativePlatform()
-			? getOrCreatePassphrase()
-					.then((passphrase) => openDb({ passphrase }))
+			? ensureEncryptionSecret()
+					.then(() => openDb())
 					.then(() => undefined as void)
 			: Promise.resolve();
 		// If initialisation fails, clear the cached promise so the next ensureDb()

@@ -6,6 +6,17 @@ import {
 } from '$lib/db/schema';
 import { daysBetween, shiftISO, humanize } from '$lib/ui/format';
 
+// A period is one bleeding run. Real bleeding — especially in irregular or long
+// cycles — often pauses for a day or two and then resumes. We treat a gap of up
+// to 2 missed days (≤ 3 calendar days between the last bleeding day and the next)
+// as the SAME period, not a new one. Without this, stop-start bleeding fabricates
+// a spurious short "cycle", a false "shortest cycle under 21" flag, and wrongly
+// forces regularity to "irregular". No real cycle is < 21 days, so merging close
+// runs can never swallow a genuine new period. All three walk-back sites
+// (detectEpisodes, cycleStatusFor, the report's range filter) use this value so
+// they always agree on where a period starts.
+export const PERIOD_MERGE_GAP_DAYS = 3;
+
 export interface PeriodEpisode {
 	start: string;
 	end: string;
@@ -86,19 +97,19 @@ export function cycleStatusFor(entries: CycleEntry[], dateISO: string): CycleSta
 	const bleeding = new Set(
 		entries.filter((e) => e.flow_intensity !== 'none').map((e) => e.date)
 	);
-	// Walk back to the episode start, hopping over 1-day gaps the same way
-	// detectEpisodes does (daysBetween <= 2 merges runs separated by one missed day).
+	// Walk back to the episode start, hopping over short gaps the same way
+	// detectEpisodes does (up to PERIOD_MERGE_GAP_DAYS calendar days apart merges
+	// runs separated by one or two missed days). Nearest bleeding day first.
 	const episodeStart = (day: string): string => {
 		let start = day;
-		for (;;) {
-			const prev = shiftISO(start, -1);
-			if (bleeding.has(prev)) {
-				start = prev;
-			} else if (bleeding.has(shiftISO(start, -2))) {
-				start = shiftISO(start, -2);
-			} else {
-				break;
+		outer: for (;;) {
+			for (let gap = 1; gap <= PERIOD_MERGE_GAP_DAYS; gap++) {
+				if (bleeding.has(shiftISO(start, -gap))) {
+					start = shiftISO(start, -gap);
+					continue outer;
+				}
 			}
+			break;
 		}
 		return start;
 	};
@@ -131,12 +142,12 @@ function detectEpisodes(sorted: CycleEntry[]): PeriodEpisode[] {
 	for (const e of bleeding) {
 		const isHeavy = e.flow_intensity === 'heavy';
 		const last = episodes[episodes.length - 1];
-		// Merge consecutive bleeding days, hopping over at most 1 missed day.
+		// Merge consecutive bleeding days, hopping over up to 2 missed days.
 		// No length cap — a 15-day bleed is one episode, not two. A cap here
 		// fabricates a ~14-day "cycle" from a single long bleed and triggers
 		// false "shortest cycle under 21" flags. The existing >7-day period flag
 		// surfaces unusually long bleeds without splitting them.
-		if (last && daysBetween(last.end, e.date) <= 2) {
+		if (last && daysBetween(last.end, e.date) <= PERIOD_MERGE_GAP_DAYS) {
 			last.end = e.date;
 			last.length = daysBetween(last.start, e.date) + 1;
 			if (isHeavy) last.heavyDays += 1;

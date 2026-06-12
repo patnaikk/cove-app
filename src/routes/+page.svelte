@@ -13,7 +13,7 @@
 		getEntryByDate,
 		getAllEntries
 	} from '$lib/db/cycleRepository';
-	import { cycleStatusFor, detectEpisodesPublic } from '$lib/report/analyze';
+	import { cycleStatusFor, detectEpisodesPublic, buildSummary } from '$lib/report/analyze';
 	import { maybeRequestReview } from '$lib/ui/review';
 	import {
 		FLOW_INTENSITIES,
@@ -82,6 +82,77 @@
 	// auto-open when the loaded day already has a value (so data is never hidden).
 	let weightOpen = $state(false);
 	let notesOpen = $state(false);
+
+	// Backfill: a new user often installs Cove mid-period (the "this one won't stop"
+	// moment), and irregular long bleeds are this app's normal load — stepping back
+	// day-by-day to log each one is the one real grind in the core flow. This lets
+	// her name a start date and fill the whole run at one intensity in a single tap.
+	let backfillOpen = $state(false);
+	let backfillStart = $state('');
+	let backfillFlow = $state<FlowIntensity>('medium');
+	let backfilling = $state(false);
+	let backfillError = $state('');
+	// Inclusive day count for the run start → today; null when the date is invalid.
+	const backfillDays = $derived.by(() => {
+		if (!backfillStart || backfillStart > selectedDate) return null;
+		const n = daysBetween(backfillStart, selectedDate) + 1;
+		return n >= 1 && n <= 91 ? n : null;
+	});
+	// Earliest selectable start — a 90-day cap keeps a fat-fingered date from
+	// writing months of phantom bleeding.
+	const backfillMin = $derived(shiftISO(selectedDate, -90));
+
+	function openBackfill() {
+		selectionTick();
+		backfillError = '';
+		// A sensible default the user can adjust: a ~5-day run ending on the selected day.
+		if (!backfillStart || backfillStart > selectedDate || backfillStart < backfillMin) {
+			backfillStart = shiftISO(selectedDate, -4);
+		}
+		backfillOpen = true;
+	}
+
+	// Fill every day from backfillStart through the selected day with the chosen
+	// flow. Days that already record bleeding are left untouched; days with other
+	// data (symptoms/mood) keep it and only gain a flow value. Writes directly by
+	// date rather than through the per-day autosave, so flush any pending edit first.
+	async function runBackfill() {
+		const n = backfillDays;
+		if (n == null || backfilling) return;
+		backfilling = true;
+		backfillError = '';
+		try {
+			flushSave();
+			await saveChain;
+			await ensureDb();
+			for (let i = 0; i < n; i++) {
+				const day = shiftISO(backfillStart, i);
+				const existing = await getEntryByDate(day);
+				if (existing) {
+					if (existing.flow_intensity === 'none') {
+						await updateEntry(existing.id, { flow_intensity: backfillFlow });
+					}
+				} else {
+					await addEntry({
+						date: day,
+						flow_intensity: backfillFlow,
+						symptoms: [],
+						mood: [],
+						weight: null,
+						notes: null
+					});
+				}
+			}
+			successTick();
+			backfillOpen = false;
+			await load(selectedDate); // refresh allEntries, the status pill, and the open day
+		} catch (e) {
+			console.error('[cove] backfill failed:', e);
+			backfillError = 'Could not save those days — please try again.';
+		} finally {
+			backfilling = false;
+		}
+	}
 
 	let saving = $state(false);
 	let savingShown = $state(false);
@@ -190,6 +261,17 @@
 				? `Cycle day ${status.daysSince + 1}`
 				: 'No period logged yet'
 	);
+
+	// Surface ONLY the prolonged-absence signal on Today. It's the one a non-bleeding
+	// user would otherwise never see (she has no reason to open the Report when she's
+	// not logging anything), and it self-resolves the moment she logs a period — so it
+	// can never become a standing daily banner. Heavy-bleeding and the analytical
+	// flags stay in the Report, where they belong, to keep Today calm and non-alarmist.
+	// Only on the live today view, so swiping back through history stays quiet.
+	const absenceDays = $derived.by(() => {
+		const d = buildSummary(allEntries, todayISO()).daysSinceLastPeriod;
+		return d != null && d > 90 ? d : null;
+	});
 
 	function reset() {
 		flow = 'none';
@@ -443,9 +525,9 @@
 			//     of the second episode (not a later day within it)
 			//   - gap >= 14 days between the two episode starts: confirms this is a
 			//     genuine NEW period, not a logging gap. detectEpisodes now merges runs
-			//     split by ≤ 1 missed day, so a single skipped mid-period day no longer
+			//     split by ≤ 2 missed days, so a short mid-period gap no longer
 			//     fabricates a second episode. The 14-day guard is belt-and-suspenders
-			//     for gaps > 1 day; no real cycle is < 21 days.
+			//     for gaps > 2 days; no real cycle is < 21 days.
 			if (payload.flow_intensity !== 'none' && payload.date === todayISO()) {
 				const episodes = detectEpisodesPublic(allEntries);
 				if (
@@ -523,6 +605,14 @@
 		<div class="cycle-status" class:bleeding={status.kind === 'period'}>{statusText}</div>
 	{/if}
 
+	{#if !loading && !loadError && isToday && absenceDays != null}
+		<a class="urgent-note" href="/report">
+			<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+			<span>It’s been {absenceDays} days since your last period — worth discussing with your doctor.</span>
+			<svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+		</a>
+	{/if}
+
 	{#if showBackupNudge}
 		<div class="backup-nudge" role="note">
 			<div class="nudge-body">
@@ -570,6 +660,48 @@
 		</section>
 
 		{#if isToday}
+			{#if backfillOpen}
+				<section class="card backfill">
+					<h2>Period started earlier?</h2>
+					<p class="hint">Pick the day it began — we’ll fill every day up to today.</p>
+					<label class="bf-field">
+						<span class="bf-label">Started</span>
+						<input
+							type="date"
+							bind:value={backfillStart}
+							min={backfillMin}
+							max={selectedDate}
+							aria-label="Period start date"
+						/>
+					</label>
+					<div class="bf-flow">
+						{#each FLOW_INTENSITIES.filter((l) => l !== 'none') as level (level)}
+							<button
+								class="flow-opt"
+								class:selected={backfillFlow === level}
+								aria-pressed={backfillFlow === level}
+								onclick={() => { selectionTick(); backfillFlow = level; }}
+							>
+								<span class="dot" style="background: {flowColors[level]}"></span>
+								<span class="flow-label">{humanize(level)}</span>
+							</button>
+						{/each}
+					</div>
+					{#if backfillError}<p class="bf-error" role="alert">{backfillError}</p>{/if}
+					<div class="bf-actions">
+						<button class="bf-cancel" onclick={() => (backfillOpen = false)} disabled={backfilling}>Cancel</button>
+						<button class="bf-confirm" onclick={runBackfill} disabled={backfillDays == null || backfilling}>
+							{#if backfilling}Saving…{:else if backfillDays != null}Mark {backfillDays} day{backfillDays === 1 ? '' : 's'}{:else}Pick a start date{/if}
+						</button>
+					</div>
+				</section>
+			{:else}
+				<button class="add-row" onclick={openBackfill}>
+					<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+					Period started earlier?
+				</button>
+			{/if}
+
 			<a class="flare-card" href="/flare">
 				<span class="flare-title">Log a pain flare</span>
 				<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
@@ -742,6 +874,35 @@
 	.cycle-status.bleeding {
 		background: color-mix(in srgb, var(--flow-medium) 22%, transparent);
 		color: var(--flow-heavy-ink);
+	}
+
+	/* Calm pointer to the report when an urgent clinical signal exists — amber
+	   attention palette, never a red alarm. Tappable, full-width, sits above the log. */
+	.urgent-note {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		margin: -8px 0 20px;
+		padding: 12px 14px;
+		border-radius: var(--radius-card);
+		border: 1px solid var(--attn-line);
+		background: var(--attn-bg);
+		color: var(--attn-ink);
+		text-decoration: none;
+		transition: opacity 0.12s;
+	}
+	.urgent-note:active {
+		opacity: 0.6;
+	}
+	.urgent-note span {
+		flex: 1;
+		font-size: 13px;
+		line-height: 1.4;
+		font-weight: 500;
+	}
+	.urgent-note .chev {
+		flex: none;
+		opacity: 0.6;
 	}
 	.long-date {
 		font-size: 15px;
@@ -1167,6 +1328,78 @@
 		font-weight: 600;
 		letter-spacing: -0.1px;
 		color: var(--accent);
+	}
+
+	/* Backfill panel — mirrors the inset card; opens from the slim add-row above. */
+	.backfill {
+		margin-bottom: 12px;
+	}
+	.bf-field {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		margin-top: 8px;
+	}
+	.bf-label {
+		font-size: 15px;
+		color: var(--ink);
+	}
+	.bf-field input {
+		border: 1px solid var(--line);
+		border-radius: var(--radius-control);
+		padding: 10px 12px;
+		font-size: 15px;
+		color: var(--ink);
+		background: var(--surface);
+		outline: none;
+	}
+	.bf-field input:focus {
+		border-color: var(--accent);
+	}
+	.bf-flow {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		gap: 8px;
+		margin-top: 14px;
+	}
+	.bf-error {
+		margin-top: 12px;
+		font-size: 13px;
+		line-height: 1.4;
+		color: var(--flow-heavy-ink);
+	}
+	.bf-actions {
+		display: flex;
+		gap: 10px;
+		margin-top: 16px;
+	}
+	.bf-cancel,
+	.bf-confirm {
+		flex: 1;
+		min-height: 44px;
+		padding: 0 16px;
+		border-radius: var(--radius-control);
+		font-size: 15px;
+		font-weight: 600;
+		transition: transform 0.1s, opacity 0.12s;
+	}
+	.bf-cancel:active,
+	.bf-confirm:active {
+		transform: scale(0.98);
+	}
+	.bf-cancel {
+		background: var(--surface);
+		border: 1.5px solid var(--line);
+		color: var(--ink);
+	}
+	.bf-confirm {
+		background: var(--accent-fill);
+		border: none;
+		color: #fff;
+	}
+	.bf-confirm:disabled {
+		opacity: 0.5;
 	}
 
 	/* Collapsed occasional-use section: reads like a slim card-row, opens on tap. */

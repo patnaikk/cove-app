@@ -2,7 +2,7 @@
 	import { ensureDb } from '$lib/db/init';
 	import { getAllEntries, updateEntry } from '$lib/db/cycleRepository';
 	import { SEVERITY_LABELS, type CycleEntry, type Severity } from '$lib/db/schema';
-	import { buildSummary, type ReportSummary, type Regularity } from '$lib/report/analyze';
+	import { buildSummary, PERIOD_MERGE_GAP_DAYS, type ReportSummary, type Regularity } from '$lib/report/analyze';
 	import { buildCsv } from '$lib/report/csv';
 	import { downloadText, printReport } from '$lib/report/export';
 	import { isPdfUnlocked, devSetPdfUnlocked, purchasePdfUnlock, getPdfPrice, restorePurchases, getBillingCacheReady } from '$lib/billing/entitlement.svelte';
@@ -45,19 +45,20 @@
 		const bleedingDates = new Set(
 			all.filter((e) => e.flow_intensity !== 'none').map((e) => e.date)
 		);
-		// Mirror the 1-day gap-hop that detectEpisodes uses so a period broken by
-		// a single missed day is walked back to its true start, not the boundary day.
+		// Mirror the gap-hop that detectEpisodes uses so a period broken by one or
+		// two missed days is walked back to its true start, not the boundary day.
 		let backSteps = 0;
 		while (backSteps < 30) {
-			if (bleedingDates.has(shiftISO(start, -1))) {
-				start = shiftISO(start, -1);
-				backSteps++;
-			} else if (bleedingDates.has(shiftISO(start, -2))) {
-				start = shiftISO(start, -2);
-				backSteps += 2;
-			} else {
-				break;
+			let hopped = false;
+			for (let gap = 1; gap <= PERIOD_MERGE_GAP_DAYS; gap++) {
+				if (bleedingDates.has(shiftISO(start, -gap))) {
+					start = shiftISO(start, -gap);
+					backSteps += gap;
+					hopped = true;
+					break;
+				}
 			}
+			if (!hopped) break;
 		}
 		return all.filter((e) => e.date >= start && e.date <= todayISO());
 	}

@@ -23,15 +23,17 @@
 		medium: 'var(--flow-medium)',
 		heavy: 'var(--flow-heavy)'
 	};
-	// Light flow days keep dark ink; deeper days need light ink for contrast.
+	// --flow-light and --flow-medium backgrounds are warm tan/clay and don't change
+	// between themes, so they always need dark ink regardless of light/dark mode.
+	// #1c1b19 on #e0c6a4 = 6.8:1; on #c8895a = 5.9:1. Heavy (#9c513a) passes 4.9:1 with white.
 	const flowInk: Record<FlowIntensity, string> = {
 		none: 'var(--ink)',
-		light: 'var(--ink)',
-		medium: '#fff',
+		light: '#1c1b19',
+		medium: '#1c1b19',
 		heavy: '#fff'
 	};
 
-	const WEEKDAYS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+	const WEEKDAYS = ['M', 'Tu', 'W', 'Th', 'F', 'Sa', 'Su'];
 	// Reactive so the "today" ring moves if the date rolls over while the app is
 	// suspended on this tab overnight and then foregrounded.
 	let today = $state(todayISO());
@@ -48,9 +50,17 @@
 	let month = $state(now.getMonth());
 	let yearPickerOpen = $state(false);
 
-	// Years from 2020 to this year — enough history without an infinite list.
-	const MIN_YEAR = 2020;
-	const years = Array.from({ length: now.getFullYear() - MIN_YEAR + 1 }, (_, i) => MIN_YEAR + i).reverse();
+	// Current year/month derived from the reactive `today`, not the mount-time Date —
+	// so the Today button and future-month gating stay correct if the date rolls over
+	// while the app is suspended on this tab.
+	const curYear = $derived(Number(today.slice(0, 4)));
+	const curMonth = $derived(Number(today.slice(5, 7)) - 1);
+
+	// Years from 2015 to this year — covers users with longer tracking histories.
+	const MIN_YEAR = 2015;
+	const years = $derived(
+		Array.from({ length: curYear - MIN_YEAR + 1 }, (_, i) => MIN_YEAR + i).reverse()
+	);
 
 	const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -84,13 +94,13 @@
 		status.kind === 'period'
 			? `Period · Day ${status.day}`
 			: status.kind === 'between'
-				? `${status.daysSince} ${status.daysSince === 1 ? 'day' : 'days'} since your last period`
+				? `Cycle day ${status.daysSince + 1}`
 				: null
 	);
 
 	const cells = $derived(monthGridDates(year, month));
 	const label = $derived(monthLabel(year, month));
-	const isCurrentMonth = $derived(year === now.getFullYear() && month === now.getMonth());
+	const isCurrentMonth = $derived(year === curYear && month === curMonth);
 
 	async function load(y: number, m: number) {
 		loading = true;
@@ -141,8 +151,8 @@
 	function goToday() {
 		if (isCurrentMonth) return;
 		selectionTick();
-		year = now.getFullYear();
-		month = now.getMonth();
+		year = curYear;
+		month = curMonth;
 		yearPickerOpen = false;
 	}
 	function openDay(iso: string) {
@@ -181,7 +191,7 @@
 					</button>
 					<div class="yp-months">
 						{#each MONTH_NAMES as name, m (m)}
-							{@const isFuture = y > now.getFullYear() || (y === now.getFullYear() && m > now.getMonth())}
+							{@const isFuture = y > curYear || (y === curYear && m > curMonth)}
 							<button
 								class="yp-month"
 								class:active={y === year && m === month}
@@ -256,7 +266,7 @@
 			<p>Days you log will fill in here, colored by flow.</p>
 			<a class="cal-empty-cta" href="/">Log your first day</a>
 		</div>
-	{:else}
+	{:else if !loading && Object.values(byDate).some(e => e.flow_intensity !== 'none')}
 	<div class="legend">
 		<span class="key"><span class="swatch" style="background: var(--flow-light)"></span>Light</span>
 		<span class="key"><span class="swatch" style="background: var(--flow-medium)"></span>Medium</span>
@@ -428,7 +438,7 @@
 	}
 	.cycle-status.bleeding {
 		background: color-mix(in srgb, var(--flow-medium) 22%, transparent);
-		color: var(--flow-heavy);
+		color: var(--flow-heavy-ink);
 	}
 
 	.error-state {

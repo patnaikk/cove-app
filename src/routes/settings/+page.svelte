@@ -18,7 +18,7 @@
 	import { ensureDb } from '$lib/db/init';
 	import { buildCsv } from '$lib/report/csv';
 	import { downloadText } from '$lib/report/export';
-	import { isPdfUnlocked, restorePurchases, getBillingCacheReady } from '$lib/billing/entitlement';
+	import { isPdfUnlocked, restorePurchases } from '$lib/billing/entitlement.svelte';
 	import { todayISO } from '$lib/ui/format';
 	import { Capacitor } from '@capacitor/core';
 
@@ -53,8 +53,10 @@
 		try {
 			await setReminderEnabled(!reminderOn);
 			reminderMsg = null;
-		} catch {
-			reminderMsg = 'Could not update reminder — please try again.';
+		} catch (e: any) {
+			reminderMsg = e?.code === 'notification_permission_denied'
+				? 'Notifications are off for Cove. Go to iOS Settings → Notifications to allow them.'
+				: 'Could not update reminder — please try again.';
 		}
 	}
 	async function onReminderTime(e: Event) {
@@ -80,12 +82,7 @@
 		setAppearance(a);
 	}
 
-	let pdfUnlocked = $state(isPdfUnlocked());
-	// Re-read once the persisted entitlement cache has loaded — on a cold launch the
-	// synchronous read above can run before billing init restores the cached unlock.
-	$effect(() => {
-		getBillingCacheReady().then(() => { pdfUnlocked = isPdfUnlocked(); });
-	});
+	const pdfUnlocked = $derived(isPdfUnlocked());
 	let restoreMsg = $state<string | null>(null);
 	let restoreBusy = $state(false);
 
@@ -94,7 +91,6 @@
 		restoreMsg = null;
 		try {
 			const found = await restorePurchases();
-			pdfUnlocked = isPdfUnlocked(); // refresh row immediately after restore
 			restoreMsg = found ? 'Purchase restored.' : 'No previous purchase found.';
 		} catch {
 			restoreMsg = 'Restore failed — please try again.';
@@ -117,8 +113,9 @@
 				dataMsg = 'Nothing to export yet.';
 				return;
 			}
-			await downloadText(`cove-export-${todayISO()}.csv`, buildCsv(entries), 'text/csv');
-			dataMsg = `Exported ${entries.length} ${entries.length === 1 ? 'day' : 'days'}.`;
+			const shared = await downloadText(`cove-export-${todayISO()}.csv`, buildCsv(entries), 'text/csv');
+			// Dismissed share sheet = changed their mind — no message either way.
+			dataMsg = shared ? `Exported ${entries.length} ${entries.length === 1 ? 'day' : 'days'}.` : null;
 		} catch (e) {
 			console.error('[vault] export failed:', e);
 			dataMsg = 'Export failed — please try again.';
@@ -250,7 +247,6 @@
 		</div>
 		<button class="row tappable disclosure" onclick={doRestore} disabled={restoreBusy}>
 			<span class="row-label">{restoreBusy ? 'Restoring…' : 'Restore purchases'}</span>
-			<svg class="chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
 		</button>
 	</div>
 	{#if restoreMsg}
@@ -327,7 +323,7 @@
 	.reminder-error {
 		margin: 6px 4px 0;
 		font-size: 13px;
-		color: var(--flow-heavy);
+		color: var(--flow-heavy-ink);
 	}
 
 	.group {
@@ -469,7 +465,7 @@
 		color: var(--ink-faint);
 	}
 	.destructive .row-label {
-		color: var(--flow-heavy);
+		color: var(--flow-heavy-ink);
 	}
 	/* Inset separator between the two data rows / the confirm row. */
 	.data-group .row + .row::before {
@@ -487,7 +483,7 @@
 	.wipe-cancel,
 	.wipe-go {
 		flex: 1;
-		min-height: 40px;
+		min-height: 44px;
 		border-radius: var(--radius-control);
 		font-size: 15px;
 		font-weight: 600;

@@ -86,10 +86,20 @@ export function cycleStatusFor(entries: CycleEntry[], dateISO: string): CycleSta
 	const bleeding = new Set(
 		entries.filter((e) => e.flow_intensity !== 'none').map((e) => e.date)
 	);
-	// Walk back over contiguous bleeding days to find the start of an episode.
+	// Walk back to the episode start, hopping over 1-day gaps the same way
+	// detectEpisodes does (daysBetween <= 2 merges runs separated by one missed day).
 	const episodeStart = (day: string): string => {
 		let start = day;
-		while (bleeding.has(shiftISO(start, -1))) start = shiftISO(start, -1);
+		for (;;) {
+			const prev = shiftISO(start, -1);
+			if (bleeding.has(prev)) {
+				start = prev;
+			} else if (bleeding.has(shiftISO(start, -2))) {
+				start = shiftISO(start, -2);
+			} else {
+				break;
+			}
+		}
 		return start;
 	};
 
@@ -121,9 +131,14 @@ function detectEpisodes(sorted: CycleEntry[]): PeriodEpisode[] {
 	for (const e of bleeding) {
 		const isHeavy = e.flow_intensity === 'heavy';
 		const last = episodes[episodes.length - 1];
-		if (last && daysBetween(last.end, e.date) === 1) {
+		// Merge consecutive bleeding days, hopping over at most 1 missed day.
+		// No length cap — a 15-day bleed is one episode, not two. A cap here
+		// fabricates a ~14-day "cycle" from a single long bleed and triggers
+		// false "shortest cycle under 21" flags. The existing >7-day period flag
+		// surfaces unusually long bleeds without splitting them.
+		if (last && daysBetween(last.end, e.date) <= 2) {
 			last.end = e.date;
-			last.length += 1;
+			last.length = daysBetween(last.start, e.date) + 1;
 			if (isHeavy) last.heavyDays += 1;
 		} else {
 			episodes.push({

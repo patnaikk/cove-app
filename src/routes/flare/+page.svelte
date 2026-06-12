@@ -16,6 +16,8 @@
 	// needs a few big, high-contrast taps, not the full daily form.
 	const PAIN_KEYS = (SYMPTOM_GROUPS.find((g) => g.label === 'Pain')?.keys ?? []) as readonly Symptom[];
 
+	let isDirty = $state(false);
+	let confirmBack = $state(false);
 	let loading = $state(true);
 	let loadingShown = $state(false);
 	let loadTimer: ReturnType<typeof setTimeout>;
@@ -65,6 +67,7 @@
 
 	function cycle(key: Symptom) {
 		selectionTick();
+		isDirty = true;
 		const current = painMap[key];
 		const next =
 			current === undefined ? 1 : current === 3 ? undefined : ((current + 1) as Severity);
@@ -88,10 +91,24 @@
 		saving = true;
 		saveError = false;
 		try {
-			if (existingId) {
-				await updateEntry(existingId, { symptoms });
+			// Re-resolve by date at write time rather than using the mount-time snapshot.
+			// Today's debounced autosave may not have landed yet when Flare loads, so
+			// existingId can be stale null even if a row already exists — causing addEntry
+			// to fail with "Entry already exists" and leaving the user with no retry path.
+			const today = todayISO();
+			const current = await getEntryByDate(today);
+			if (current) {
+				// Re-derive non-pain symptoms from the live row so Today's autosave
+				// (which may have landed after Flare loaded) isn't silently overwritten.
+				const liveOther = current.symptoms.filter(
+					(s) => !(PAIN_KEYS as readonly string[]).includes(s.key)
+				);
+				const merged = [...liveOther, ...pain];
+				await updateEntry(current.id, { symptoms: merged });
+				existingId = current.id;
 			} else {
-				const created = await addEntry({ date: todayISO(), flow_intensity: 'none', symptoms, mood: [] });
+				const merged = [...otherSymptoms, ...pain];
+				const created = await addEntry({ date: today, flow_intensity: 'none', symptoms: merged, mood: [] });
 				existingId = created.id;
 			}
 			justSaved = true;
@@ -108,9 +125,16 @@
 
 <div class="page">
 	<header class="nav-bar">
-		<a class="back" href="/" aria-label="Back to log">
-			<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7" /></svg>
-		</a>
+		{#if confirmBack}
+			<div class="back-confirm">
+				<button class="back-cancel" onclick={() => (confirmBack = false)}>Keep editing</button>
+				<button class="back-discard" onclick={() => goto('/')}>Discard</button>
+			</div>
+		{:else}
+			<button class="back" onclick={() => (isDirty ? (confirmBack = true) : goto('/'))} aria-label="Back to log">
+				<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7" /></svg>
+			</button>
+		{/if}
 	</header>
 
 	<div class="head">
@@ -163,7 +187,8 @@
 
 <style>
 	.page {
-		padding: 0 16px 120px;
+		/* Clearance for the fixed Save footer, which grows with the home indicator. */
+		padding: 0 16px calc(120px + var(--safe-bottom));
 	}
 	.nav-bar {
 		display: flex;
@@ -177,11 +202,39 @@
 		place-items: center;
 		width: 44px;
 		height: 44px;
+		border: none;
+		background: transparent;
 		color: var(--accent);
 		transition: opacity 0.12s;
 	}
 	.back:active {
 		opacity: 0.4;
+	}
+	.back-confirm {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex: 1;
+	}
+	.back-cancel {
+		min-height: 36px;
+		padding: 0 14px;
+		border-radius: var(--radius-control);
+		border: 1px solid var(--line);
+		background: var(--surface);
+		color: var(--ink);
+		font-size: 14px;
+		font-weight: 600;
+	}
+	.back-discard {
+		min-height: 36px;
+		padding: 0 14px;
+		border-radius: var(--radius-control);
+		border: none;
+		background: color-mix(in srgb, var(--flow-heavy) 12%, transparent);
+		color: var(--flow-heavy-ink);
+		font-size: 14px;
+		font-weight: 600;
 	}
 
 	.head {
@@ -232,7 +285,7 @@
 		margin: 0 0 10px;
 		text-align: center;
 		font-size: 13px;
-		color: var(--flow-heavy);
+		color: var(--flow-heavy-ink);
 	}
 
 	.grid {

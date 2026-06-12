@@ -28,6 +28,8 @@
 	} from '$lib/db/schema';
 	import { humanize, todayISO, shiftISO, friendlyDate, longDate, daysBetween } from '$lib/ui/format';
 	import { getWeightUnit, kgToDisplay, displayToKg, isBackupNudgeDismissed, dismissBackupNudge } from '$lib/ui/preferences.svelte';
+	import { buildCsv } from '$lib/report/csv';
+	import { downloadText } from '$lib/report/export';
 	import { selectionTick, successTick } from '$lib/ui/haptics';
 	import { swipeX, longPress } from '$lib/ui/swipe';
 	import { page } from '$app/state';
@@ -70,6 +72,10 @@
 	let activeTip = $state<string | null>(null);
 	let mood = $state<Mood[]>([]);
 	let weight = $state<string>('');
+	// Track the original kg value loaded from DB so saves that only edit symptoms/mood
+	// don't re-convert the display string and introduce rounding drift.
+	let weightKgOriginal = $state<number | null>(null);
+	let weightDirty = $state(false);
 	let notes = $state('');
 
 	// Occasional-use sections stay collapsed to keep the daily scroll short; they
@@ -78,6 +84,8 @@
 	let notesOpen = $state(false);
 
 	let saving = $state(false);
+	let savingShown = $state(false);
+	let savingShowTimer: ReturnType<typeof setTimeout> | undefined;
 	let justSaved = $state(false);
 	let loadError = $state(false);
 	let saveError = $state(false);
@@ -119,10 +127,10 @@
 	// Soft plausibility check: outside 25–250 kg (55–551 lb) the value is almost
 	// certainly a typo (e.g. 638 instead of 63.8). Block nothing — just ask.
 	const weightWarning = $derived.by(() => {
-		const raw = String(weight ?? '').trim();
+		const raw = String(weight ?? '').trim().replace(',', '.');
 		if (!raw) return null;
 		const v = Number(raw);
-		if (!Number.isFinite(v) || v <= 0) return null;
+		if (!Number.isFinite(v) || v <= 0) return "That doesn't look like a valid number.";
 		const kg = displayToKg(v);
 		if (kg < 25 || kg > 250) {
 			return weightUnit === 'lb'
@@ -151,6 +159,21 @@
 		setTimeout(() => el.focus(), 30);
 	}
 
+	function onWeightInput() {
+		weightDirty = true;
+		scheduleSave();
+	}
+
+	// Export data directly from the backup nudge — no redirect to Settings needed.
+	async function exportFromNudge() {
+		try {
+			await downloadText(`cove-export-${todayISO()}.csv`, buildCsv(allEntries), 'text/csv');
+			dismissNudge();
+		} catch (e) {
+			console.error('[cove] nudge export failed:', e);
+		}
+	}
+
 	// Keep a focused field visible above the keyboard (also helps in-browser).
 	function scrollFocus(e: FocusEvent) {
 		const el = e.target as HTMLElement;
@@ -164,7 +187,7 @@
 		status.kind === 'period'
 			? `Period · Day ${status.day}`
 			: status.kind === 'between'
-				? `${status.daysSince} ${status.daysSince === 1 ? 'day' : 'days'} since your last period`
+				? `Cycle day ${status.daysSince + 1}`
 				: 'No period logged yet'
 	);
 
@@ -173,11 +196,15 @@
 		symptomMap = {};
 		mood = [];
 		weight = '';
+		weightKgOriginal = null;
+		weightDirty = false;
 		notes = '';
 		existingId = null;
 	}
 
 	async function load(date: string) {
+		// Drain any pending write before reading so a fast day-step never loads stale data.
+		await saveChain;
 		const gen = ++loadGen;
 		loading = true;
 		loadError = false;
@@ -200,6 +227,8 @@
 				symptomMap = Object.fromEntries(entry.symptoms.map((s) => [s.key, s.severity]));
 				mood = entry.mood;
 				weight = entry.weight != null ? String(kgToDisplay(entry.weight)) : '';
+				weightKgOriginal = entry.weight ?? null;
+				weightDirty = false;
 				notes = entry.notes ?? '';
 			} else {
 				reset();
@@ -333,27 +362,36 @@
 	let saveChain: Promise<void> = Promise.resolve();
 
 	function save(): Promise<void> {
+		// If the weight field wasn't edited this session, pass the original kg value
+		// straight through — avoids display-rounding drift on every non-weight save.
+		let weightKg: number | null;
+		if (!weightDirty && weightKgOriginal !== null) {
+			weightKg = weightKgOriginal;
+		} else {
+			// Normalise: comma decimal separators (common outside US) become dots.
+			const rawWeight = String(weight ?? '').trim().replace(',', '.');
+			const parsedWeight = rawWeight === '' ? null : Number(rawWeight);
+			// Treat 0, negative, and non-numeric as unset — no human weighs 0 kg/lb,
+			// and a parse failure (NaN) should not silently drop to null without warning.
+			weightKg =
+				parsedWeight != null && Number.isFinite(parsedWeight) && parsedWeight > 0
+					? displayToKg(parsedWeight)
+					: null;
+		}
+
 		// Don't create a blank record for a day the user never actually logged anything on.
+		// Weight only counts if it parsed to a valid, positive number.
 		const hasContent =
 			flow !== 'none' ||
 			Object.keys(symptomMap).length > 0 ||
 			mood.length > 0 ||
-			String(weight ?? '').trim() !== '' ||
+			weightKg !== null ||
 			notes.trim().length > 0;
 		const hadEntry = existingId !== null;
 
 		const symptoms = (Object.entries(symptomMap) as [Symptom, Severity][]).map(
 			([key, severity]) => ({ key, severity })
 		);
-		// type="number" binding can hand back a number, '', or null — normalise first.
-		const rawWeight = String(weight ?? '').trim();
-		const parsedWeight = rawWeight === '' ? null : Number(rawWeight);
-		// Treat 0 as unset — no human weighs 0 kg/lb, and it would corrupt the
-		// weight range in the report. Negative values equally impossible.
-		const weightKg =
-			parsedWeight != null && Number.isFinite(parsedWeight) && parsedWeight > 0
-				? displayToKg(parsedWeight)
-				: null;
 		const payload = {
 			date: selectedDate,
 			flow_intensity: flow,
@@ -373,11 +411,17 @@
 		hadEntry: boolean
 	) {
 		saving = true;
+		savingShowTimer = setTimeout(() => { savingShown = true; }, 400);
 		saveError = false;
 		try {
 			const existing = await getEntryByDate(payload.date);
 			if (existing) {
-				await updateEntry(existing.id, payload);
+				if (!hasContent) {
+					await deleteEntry(existing.id);
+					if (selectedDate === payload.date) existingId = null;
+				} else {
+					await updateEntry(existing.id, payload);
+				}
 			} else {
 				if (!hasContent && !hadEntry) return; // nothing logged, nothing stored
 				const created = await addEntry(payload);
@@ -398,10 +442,10 @@
 			//   - episodes[1].start === selectedDate: the day being saved IS the start
 			//     of the second episode (not a later day within it)
 			//   - gap >= 14 days between the two episode starts: confirms this is a
-			//     genuine NEW period, not the first period resuming after a missed day.
-			//     detectEpisodes splits on any 2+ day gap, so a skipped mid-period day
-			//     would otherwise look like a second episode. No real cycle is < 21 days,
-			//     so 14 cleanly excludes logging-gap splits while admitting any true cycle.
+			//     genuine NEW period, not a logging gap. detectEpisodes now merges runs
+			//     split by ≤ 1 missed day, so a single skipped mid-period day no longer
+			//     fabricates a second episode. The 14-day guard is belt-and-suspenders
+			//     for gaps > 1 day; no real cycle is < 21 days.
 			if (payload.flow_intensity !== 'none' && payload.date === todayISO()) {
 				const episodes = detectEpisodesPublic(allEntries);
 				if (
@@ -418,6 +462,8 @@
 			saveError = true;
 		} finally {
 			saving = false;
+			clearTimeout(savingShowTimer);
+			savingShown = false;
 		}
 	}
 
@@ -436,9 +482,11 @@
 
 	async function remove() {
 		if (!existingId) return;
-		// A queued autosave firing after the delete would resurrect the entry.
+		// Cancel the debounce timer and wait for any in-flight write to land before
+		// deleting — an in-flight save resolves by date and would re-insert the row.
 		clearTimeout(saveTimer);
 		saveTimer = undefined;
+		await saveChain;
 		saveError = false;
 		try {
 			await deleteEntry(existingId);
@@ -478,14 +526,13 @@
 	{#if showBackupNudge}
 		<div class="backup-nudge" role="note">
 			<div class="nudge-body">
-				<span class="nudge-icon" aria-hidden="true">💾</span>
 				<div>
 					<p class="nudge-title">Back up your data</p>
 					<p class="nudge-sub">You've logged {allEntries.length} days — export a CSV so you don't lose it if something happens to this phone.</p>
 				</div>
 			</div>
 			<div class="nudge-actions">
-				<a class="nudge-cta" href="/settings">Export in Settings</a>
+				<button class="nudge-cta" onclick={exportFromNudge}>Export data</button>
 				<button class="nudge-dismiss" onclick={dismissNudge} aria-label="Dismiss backup reminder">Not now</button>
 			</div>
 		</div>
@@ -589,16 +636,14 @@
 				<h2>Weight</h2>
 				<div class="weight-row">
 					<input
-						type="number"
+						type="text"
 						inputmode="decimal"
 						bind:value={weight}
 						use:focusOnMount
 						onfocus={scrollFocus}
-						oninput={scheduleSave}
+						oninput={onWeightInput}
 						placeholder="Optional"
 						aria-label="Weight in {weightUnit}"
-						min="0"
-						step="0.1"
 					/>
 					<span class="unit">{weightUnit}</span>
 				</div>
@@ -650,7 +695,7 @@
 				Couldn’t save —
 				<button class="as-retry" onclick={() => void save()}>Retry</button>
 			</span>
-		{:else if saving}
+		{:else if savingShown}
 			<span class="as-saving">Saving…</span>
 		{:else if justSaved}
 			<span class="as-saved">
@@ -674,25 +719,6 @@
 		gap: 12px;
 		padding: 16px 0 0;
 	}
-	.bar-btn {
-		flex: none;
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		min-height: 44px;
-		min-width: 44px;
-		padding: 0 4px 2px;
-		color: var(--accent);
-		font-size: 17px;
-		font-weight: 600;
-		letter-spacing: -0.2px;
-		text-decoration: none;
-		transition: opacity 0.12s;
-	}
-	.bar-btn:active {
-		opacity: 0.4;
-	}
-
 	/* Subheadline date + a grouped two-button day stepper (each cell ≥ 44pt). */
 	.date-row {
 		display: flex;
@@ -715,7 +741,7 @@
 	}
 	.cycle-status.bleeding {
 		background: color-mix(in srgb, var(--flow-medium) 22%, transparent);
-		color: var(--flow-heavy);
+		color: var(--flow-heavy-ink);
 	}
 	.long-date {
 		font-size: 15px;
@@ -767,13 +793,7 @@
 	}
 	.nudge-body {
 		display: flex;
-		gap: 12px;
 		align-items: flex-start;
-	}
-	.nudge-icon {
-		font-size: 20px;
-		line-height: 1.2;
-		flex: none;
 	}
 	.nudge-title {
 		font-size: 14px;
@@ -799,9 +819,12 @@
 		font-size: 14px;
 		font-weight: 600;
 		color: var(--attn-ink);
-		text-decoration: none;
+		border: none;
+		background: none;
+		padding: 0;
 		border-bottom: 1px solid var(--attn-ink);
 		padding-bottom: 1px;
+		min-height: 44px;
 		transition: opacity 0.12s;
 	}
 	.nudge-cta:active { opacity: 0.6; }
@@ -886,13 +909,13 @@
 	}
 	.as-error {
 		background: color-mix(in srgb, var(--flow-heavy) 12%, transparent);
-		color: var(--flow-heavy);
+		color: var(--flow-heavy-ink);
 		pointer-events: auto;
 	}
 	.as-retry {
 		border: none;
 		background: none;
-		color: var(--flow-heavy);
+		color: var(--flow-heavy-ink);
 		font-size: 13px;
 		font-weight: 600;
 		text-decoration: underline;
@@ -1228,7 +1251,7 @@
 		padding: 14px;
 		background: none;
 		border: none;
-		color: var(--flow-heavy);
+		color: var(--flow-heavy-ink);
 		font-size: 14px;
 		margin-top: 4px;
 	}

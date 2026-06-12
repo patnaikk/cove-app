@@ -5,7 +5,7 @@
 	import { buildSummary, type ReportSummary, type Regularity } from '$lib/report/analyze';
 	import { buildCsv } from '$lib/report/csv';
 	import { downloadText, printReport } from '$lib/report/export';
-	import { isPdfUnlocked, devSetPdfUnlocked, purchasePdfUnlock, getPdfPrice, restorePurchases, getBillingCacheReady } from '$lib/billing/entitlement';
+	import { isPdfUnlocked, devSetPdfUnlocked, purchasePdfUnlock, getPdfPrice, restorePurchases, getBillingCacheReady } from '$lib/billing/entitlement.svelte';
 	import { Capacitor } from '@capacitor/core';
 	import { humanize, todayISO, shiftISO, daysBetween, friendlyDate, mediumDate } from '$lib/ui/format';
 	import { getWeightUnit, kgToDisplay } from '$lib/ui/preferences.svelte';
@@ -28,7 +28,7 @@
 	let loadTimer: ReturnType<typeof setTimeout>;
 	let loadError = $state(false);
 	let allEntries = $state<CycleEntry[]>([]);
-	let unlocked = $state(false);
+	const unlocked = $derived(isPdfUnlocked());
 
 	// The displayed report is scoped to the selected range, but it's filtered from
 	// the full history in memory — so the whole-history signals below (last period,
@@ -45,10 +45,19 @@
 		const bleedingDates = new Set(
 			all.filter((e) => e.flow_intensity !== 'none').map((e) => e.date)
 		);
+		// Mirror the 1-day gap-hop that detectEpisodes uses so a period broken by
+		// a single missed day is walked back to its true start, not the boundary day.
 		let backSteps = 0;
-		while (backSteps < 30 && bleedingDates.has(shiftISO(start, -1))) {
-			start = shiftISO(start, -1);
-			backSteps++;
+		while (backSteps < 30) {
+			if (bleedingDates.has(shiftISO(start, -1))) {
+				start = shiftISO(start, -1);
+				backSteps++;
+			} else if (bleedingDates.has(shiftISO(start, -2))) {
+				start = shiftISO(start, -2);
+				backSteps += 2;
+			} else {
+				break;
+			}
 		}
 		return all.filter((e) => e.date >= start && e.date <= todayISO());
 	}
@@ -187,8 +196,6 @@
 			await ensureDb();
 			allEntries = await getAllEntries();
 			await getBillingCacheReady();
-			unlocked = isPdfUnlocked();
-			pdfPrice = getPdfPrice();
 			if (!rangeInitialized) {
 				rangeInitialized = true;
 				const picked = pickInitialRange(allEntries);
@@ -218,18 +225,27 @@
 		const entry = entryByDate[startDate];
 		if (!entry) return;
 		selectionTick();
-		await updateEntry(entry.id, { exclude_from_stats: exclude });
-		// Refresh in place (no global loading flash) — the derived summary recomputes
-		// from the new data, so the stats update without the report blanking out.
-		allEntries = await getAllEntries();
+		try {
+			await updateEntry(entry.id, { exclude_from_stats: exclude });
+			// Refresh in place (no global loading flash) — the derived summary recomputes
+			// from the new data, so the stats update without the report blanking out.
+			allEntries = await getAllEntries();
+		} catch (e) {
+			// The switch reflects allEntries, which only refreshes on success — the UI
+			// stays consistent on failure, so a log line is all that's needed.
+			console.error('[cove] exclude toggle failed:', e);
+		}
 	}
 
+	let csvError = $state('');
 	async function exportCsv() {
+		csvError = '';
 		try {
 			// Always export the full history, not just the currently displayed range.
 			await downloadText(`cove-export-${todayISO()}.csv`, buildCsv(allEntries), 'text/csv');
 		} catch (e) {
 			console.error('[cove] export failed:', e);
+			csvError = 'Could not export — please try again.';
 		}
 	}
 
@@ -245,10 +261,11 @@
 		}
 	}
 
+	let includeNotes = $state(true);
 	let sampleOpen = $state(false);
 	let purchasing = $state(false);
 	let purchaseError = $state('');
-	let pdfPrice = $state(getPdfPrice());
+	const pdfPrice = $derived(getPdfPrice());
 
 	let restoring = $state(false);
 	let restoreMsg = $state('');
@@ -258,7 +275,6 @@
 		restoreMsg = '';
 		try {
 			const found = await restorePurchases();
-			unlocked = isPdfUnlocked();
 			if (unlocked) {
 				successTick();
 			} else if (!found) {
@@ -276,11 +292,14 @@
 		if (Capacitor.isNativePlatform()) {
 			purchasing = true;
 			try {
-				await purchasePdfUnlock();
-				// purchasePdfUnlock now waits for the verified chain — read directly.
-				unlocked = isPdfUnlocked();
-				if (unlocked) successTick();
-				// If still false after waiting, the user cancelled — no error shown.
+				const result = await purchasePdfUnlock();
+				if (result === 'unlocked') {
+					successTick();
+				} else if (result === 'timeout') {
+					// Order landed but verification is still in-flight — not lost.
+					purchaseError = 'Your purchase is processing — tap "Restore Purchases" in a moment if it doesn\'t activate.';
+				}
+				// 'cancelled' → user dismissed the sheet, no message needed.
 			} catch (e: any) {
 				const msg: string = (e?.message ?? '').toLowerCase();
 				if (msg.includes('not available') || msg.includes('not found')) {
@@ -294,7 +313,6 @@
 		} else {
 			// Browser dev only.
 			devSetPdfUnlocked(true);
-			unlocked = true;
 			successTick();
 		}
 	}
@@ -642,15 +660,24 @@
 			</button>
 
 			{#if unlocked}
-				<button class="btn primary" onclick={exportPdf}>Save PDF report</button>
-				{#if pdfError}<p class="purchase-error" role="alert">{pdfError}</p>{/if}
+				<button class="btn primary" onclick={exportPdf} disabled={summary.entryCount === 0}>
+					{summary.entryCount === 0 ? 'No data in this range' : 'Save PDF report'}
+				</button>
 			{:else if reportableHistory}
 				<button class="btn primary" onclick={unlock} disabled={purchasing}>
 					{purchasing ? 'Opening…' : `Unlock full report · ${pdfPrice}`}
 				</button>
-				{#if purchaseError}<p class="purchase-error">{purchaseError}</p>{/if}
 			{/if}
 		</div>
+		{#if unlocked && datedNotes.length > 0}
+			<label class="notes-toggle no-print">
+				<input type="checkbox" bind:checked={includeNotes} />
+				Include personal notes in PDF
+			</label>
+		{/if}
+		{#if csvError}<p class="purchase-error no-print" role="alert">{csvError}</p>{/if}
+		{#if pdfError}<p class="purchase-error no-print" role="alert">{pdfError}</p>{/if}
+		{#if purchaseError}<p class="purchase-error no-print" role="alert">{purchaseError}</p>{/if}
 
 		{#if !unlocked && reportableHistory}
 			<button class="restore-link no-print" onclick={restoreFromPaywall} disabled={restoring}>
@@ -888,7 +915,7 @@
 		{/if}
 
 		<!-- ── Notes ── -->
-		{#if datedNotes.length > 0}
+		{#if datedNotes.length > 0 && includeNotes}
 			<section class="pd-section">
 				<h2>Notes</h2>
 				<table class="pd-table pd-zebra">
@@ -1200,7 +1227,7 @@
 		padding-top: 5px;
 	}
 	.reg-irregular {
-		color: var(--flow-heavy);
+		color: var(--flow-heavy-ink);
 	}
 	.reg-insufficient {
 		color: var(--ink-faint);
@@ -1539,6 +1566,21 @@
 		font-size: 12px;
 		line-height: 1.45;
 		color: var(--ink-faint);
+	}
+	.notes-toggle {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin-top: 10px;
+		font-size: 13px;
+		color: var(--ink-soft);
+		cursor: pointer;
+	}
+	.notes-toggle input {
+		width: 16px;
+		height: 16px;
+		accent-color: var(--accent);
+		cursor: pointer;
 	}
 	.restore-link {
 		width: 100%;

@@ -6,7 +6,7 @@
 	import { fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
 	import { hasOnboarded, applyTheme, applyReminder } from '$lib/ui/preferences.svelte';
-	import { initBilling } from '$lib/billing/entitlement';
+	import { initBilling } from '$lib/billing/entitlement.svelte';
 	import { Capacitor } from '@capacitor/core';
 	import { resetDb, ensureDb } from '$lib/db/init';
 	import TabBar from '$lib/ui/TabBar.svelte';
@@ -24,12 +24,32 @@
 
 	// Reconcile any scheduled reminder with the saved preference on launch.
 	$effect(() => {
-		applyReminder();
+		applyReminder().catch(() => {});
 	});
 
 	// Register IAP product and restore any prior purchase on launch.
 	$effect(() => {
 		initBilling();
+	});
+
+	// Hide the tab bar while the keyboard is visible — with resize:'native' the bar
+	// would otherwise float above the keyboard rather than slide behind it.
+	$effect(() => {
+		if (!Capacitor.isNativePlatform()) return;
+		let cleanup: (() => void) | undefined;
+		import('@capacitor/keyboard').then(({ Keyboard }) => {
+			const show = Keyboard.addListener('keyboardWillShow', () => {
+				document.body.classList.add('keyboard-visible');
+			});
+			const hide = Keyboard.addListener('keyboardWillHide', () => {
+				document.body.classList.remove('keyboard-visible');
+			});
+			cleanup = () => {
+				show.then(h => h.remove());
+				hide.then(h => h.remove());
+			};
+		});
+		return () => cleanup?.();
 	});
 
 	// Reconnect the SQLite DB when iOS resumes the app from the background.
@@ -55,7 +75,8 @@
 				try {
 					// Brief grace period so any in-flight autosave write triggered by the
 					// visibilitychange flush can complete before we close the connection.
-					await new Promise(r => setTimeout(r, 300));
+					// 1s covers slower-device writes that 300ms missed.
+					await new Promise(r => setTimeout(r, 1000));
 					await resetDb();
 					await ensureDb();
 				} catch (e) {
@@ -102,9 +123,13 @@
 	<title>Cove</title>
 </svelte:head>
 
+<!-- Blur strip that covers the status-bar zone so scrolled content fades out
+     rather than disappearing naked under the clock. Mirrors the tab bar treatment. -->
+<div class="safe-top-scrim" aria-hidden="true"></div>
+
 <div class="app-shell">
 	{#if !needsOnboarding}
-		{#key page.url.pathname}
+		{#key routeId}
 			<div class="route" in:fly={routeIn}>
 				{@render children()}
 			</div>
@@ -123,5 +148,19 @@
 		min-height: 100dvh;
 		padding-top: var(--safe-top);
 		padding-bottom: var(--safe-bottom);
+	}
+	.safe-top-scrim {
+		position: fixed;
+		top: 0;
+		left: 0;
+		right: 0;
+		max-width: 480px;
+		margin: 0 auto;
+		height: var(--safe-top);
+		background: color-mix(in srgb, var(--bg) 82%, transparent);
+		backdrop-filter: saturate(180%) blur(20px);
+		-webkit-backdrop-filter: saturate(180%) blur(20px);
+		z-index: 45;
+		pointer-events: none;
 	}
 </style>

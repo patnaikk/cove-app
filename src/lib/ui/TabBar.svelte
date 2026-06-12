@@ -2,7 +2,10 @@
 	import { page } from '$app/state';
 	import { selectionTick } from '$lib/ui/haptics';
 
-	const path = $derived(page.url.pathname);
+	// route.id, not url.pathname — on native Capacitor the URL can read as
+	// capacitor://localhost/ regardless of the active page (same reasoning as
+	// the layout's routeId).
+	const path = $derived(page.route.id ?? '');
 	const isActive = (href: string) => (href === '/' ? path === '/' : path.startsWith(href));
 	// Light tick on tab change — only when actually switching sections.
 	const tap = (href: string) => {
@@ -115,5 +118,8 @@
 	}
 	.tab.on {
 		color: var(--accent);
+	}
+	:global(body.keyboard-visible) .tabbar {
+		display: none;
 	}
 </style>

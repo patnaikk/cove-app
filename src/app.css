@@ -26,6 +26,9 @@
 	--flow-light: #e0c6a4;
 	--flow-medium: #c8895a;
 	--flow-heavy: #9c513a;
+	/* Lifted variant for text/icon use only — passes 4.5:1 on the dark background
+	   while the fill token stays dark enough for white ink (5.5:1 in both modes). */
+	--flow-heavy-ink: #9c513a;
 
 	/* Severity ramp — one calm sage family deepening with intensity */
 	--sev-1-bg: #e7ede9;
@@ -73,6 +76,8 @@
 	--sev-1-ink: #cfe0d6;
 	/* "No flow" swatch: the light token reads as a glaring white dot on dark. */
 	--flow-none: #383d41;
+	/* Lifted for text/icon use — passes 4.5:1 on dark bg; fill token unchanged. */
+	--flow-heavy-ink: #c47a5a;
 }
 
 * {
@@ -106,9 +111,15 @@ body {
 button {
 	font-family: inherit;
 	cursor: pointer;
-	-webkit-tap-highlight-color: transparent;
 	-webkit-user-select: none;
 	user-select: none;
+}
+
+/* Links act as buttons throughout (tabs, CTAs, settings rows) and define their
+   own :active states — WKWebView's gray tap flash on them reads as web, not app. */
+a,
+button {
+	-webkit-tap-highlight-color: transparent;
 }
 
 /* Keyboard-only focus ring — invisible to mouse/touch, clear for a11y */
@@ -135,6 +146,11 @@ p {
 
 ::selection {
 	background: var(--accent-tint);
+}
+
+:root[data-theme='dark'] ::selection {
+	background: var(--accent);
+	color: var(--bg);
 }
 
 @media (prefers-reduced-motion: reduce) {

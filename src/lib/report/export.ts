@@ -1,13 +1,15 @@
 import { Capacitor } from '@capacitor/core';
+import { todayISO } from '$lib/ui/format';
 
 // Export a text file. On device, write it to the cache and open the iOS share
 // sheet (Save to Files, AirDrop, Mail, Print…). In the browser, fall back to a
-// Blob download.
+// Blob download. Resolves false when the user dismissed the share sheet without
+// picking a destination — a deliberate choice, not a failure.
 export async function downloadText(
 	filename: string,
 	text: string,
 	mime = 'text/plain'
-): Promise<void> {
+): Promise<boolean> {
 	if (Capacitor.isNativePlatform()) {
 		const { Filesystem, Directory, Encoding } = await import('@capacitor/filesystem');
 		const { Share } = await import('@capacitor/share');
@@ -18,8 +20,14 @@ export async function downloadText(
 			encoding: Encoding.UTF8
 		});
 		const { uri } = await Filesystem.getUri({ path: filename, directory: Directory.Cache });
-		await Share.share({ title: filename, url: uri });
-		return;
+		try {
+			await Share.share({ title: filename, url: uri });
+		} catch (e) {
+			// @capacitor/share rejects when the sheet is dismissed — that's a cancel.
+			if (String((e as Error)?.message ?? '').toLowerCase().includes('cancel')) return false;
+			throw e;
+		}
+		return true;
 	}
 	const blob = new Blob([text], { type: `${mime};charset=utf-8` });
 	const url = URL.createObjectURL(blob);
@@ -30,6 +38,7 @@ export async function downloadText(
 	a.click();
 	a.remove();
 	URL.revokeObjectURL(url);
+	return true;
 }
 
 // All print styles with fully resolved colour values — no CSS variables,
@@ -122,14 +131,20 @@ export async function printReport(): Promise<void> {
 		// a temp file, and opens the iOS share sheet in one call. No manual Filesystem
 		// dance, no base64 type-narrowing, no extra @capacitor/share call needed.
 		const { PdfGenerator } = await import('@capgo/capacitor-pdf-generator');
-		const filename = `cove-report-${new Date().toISOString().slice(0, 10)}.pdf`;
-		await PdfGenerator.fromData({
-			data: html,
-			documentSize: 'A4',
-			orientation: 'portrait',
-			type: 'share',
-			fileName: filename
-		});
+		const filename = `cove-report-${todayISO()}.pdf`;
+		try {
+			await PdfGenerator.fromData({
+				data: html,
+				documentSize: 'A4',
+				orientation: 'portrait',
+				type: 'share',
+				fileName: filename
+			});
+		} catch (e) {
+			// Dismissing the share sheet is a choice, not a failure — don't surface it.
+			if (String((e as Error)?.message ?? '').toLowerCase().includes('cancel')) return;
+			throw e;
+		}
 		return;
 	}
 	// Browser dev: use window.print() as before.

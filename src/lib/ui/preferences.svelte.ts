@@ -90,6 +90,18 @@ export function applyTheme(): void {
 	document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
 	const meta = document.querySelector('meta[name="theme-color"]');
 	if (meta) meta.setAttribute('content', dark ? '#16181a' : '#f4f1ec');
+	// The iOS status bar text follows the SYSTEM appearance, not the webview — when
+	// the user forces Light/Dark against the OS setting, the clock would be unreadable
+	// on our background. Explicitly match the bar style to the active theme.
+	if (Capacitor.isNativePlatform()) {
+		import('@capacitor/status-bar')
+			.then(({ StatusBar, Style }) =>
+				StatusBar.setStyle({ style: dark ? Style.Dark : Style.Light })
+			)
+			.catch(() => {
+				/* best-effort */
+			});
+	}
 }
 
 // Optional daily reminder. Entirely on-device via local notifications — no server,
@@ -155,14 +167,15 @@ export async function applyReminder(): Promise<void> {
 
 		const perm = await LocalNotifications.requestPermissions();
 		if (perm.display !== 'granted') {
-			// Permission refused — reflect reality back in the toggle.
+			// Permission refused — reflect reality back in the toggle, then tell the
+			// caller so Settings can explain how to fix it (iOS Settings → Notifications).
 			reminderEnabled = false;
 			try {
 				localStorage.setItem(REMINDER_ON_KEY, '0');
 			} catch {
 				/* ignore */
 			}
-			return;
+			throw Object.assign(new Error('notification_permission_denied'), { code: 'notification_permission_denied' });
 		}
 
 		const [hour, minute] = reminderTime.split(':').map(Number);
@@ -176,7 +189,9 @@ export async function applyReminder(): Promise<void> {
 				}
 			]
 		});
-	} catch (e) {
+	} catch (e: any) {
+		// Rethrow permission errors so Settings can show the "go to iOS Settings" message.
+		if (e?.code === 'notification_permission_denied') throw e;
 		console.error('[vault] reminder scheduling failed:', e);
 	}
 }
